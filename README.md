@@ -138,7 +138,7 @@ The server integration suite uses a fake WhatsApp adapter and real loopback HTTP
 
 GitHub Actions also installs server dependencies, runs these tests, builds/lints the Android app and uploads a debug APK. A live end-to-end check requires your own WhatsApp linking and tailnet: send from the app, confirm in WhatsApp, reply from another account, and confirm it appears after the next poll. Disconnect Tailscale and verify the app reports a connection failure.
 
-Local verification during implementation: eight API integration tests passed. An Android build and a live WhatsApp/Tailscale session were not run because the authoring environment had no JDK/Android SDK or linked account.
+Eight API integration tests pass locally and in CI. GitHub Actions builds and lints Android; see the [latest workflow results](https://github.com/divkakwani/chat-relay/actions/workflows/check.yml). A live WhatsApp/Tailscale session still requires your own linked account and devices.
 
 ### Dependency status
 
