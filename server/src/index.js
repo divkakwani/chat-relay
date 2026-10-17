@@ -2,7 +2,7 @@ import { createApi } from './api.js';
 import { createWhatsApp } from './whatsapp.js';
 const relay = createWhatsApp();
 const server = createApi({ token: process.env.RELAY_TOKEN, relay });
-const port = Number(process.env.PORT || 3000);
+const port = Number(process.env.PORT || 8788);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid PORT');
 server.requestTimeout = 120000;
 server.headersTimeout = 15000;
