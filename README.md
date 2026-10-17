@@ -122,6 +122,7 @@ Every push runs the build. To create a fresh APK without changing code, select *
 | Cannot connect | Tailscale connected on both devices; computer awake; Node process running; correct Serve URL; tailnet policy allows 443. |
 | Invalid access token | Same token in `.env` and Android settings; restart server after editing `.env`. |
 | WhatsApp `qr` / `syncing` | Scan the latest terminal QR and wait for session synchronization. |
+| Chat list fails although WhatsApp is ready | Restart the server with the latest source. A compatibility shim handles WhatsApp Web’s message-key field rename (`_serialized` → `$1`), which breaks upstream `getChats()` in 1.34.7. No new APK or re-link is needed. |
 | WhatsApp disconnected | Restart server; check WhatsApp Linked devices and re-link if needed. |
 | Browser fails to launch | Puppeteer browser downloaded, required Linux libraries installed, or correct `CHROME_PATH`. |
 | Empty/limited history | Wait for WhatsApp Web synchronization; only history available to the linked session is returned. |
@@ -138,7 +139,7 @@ The server integration suite uses a fake WhatsApp adapter and real loopback HTTP
 
 GitHub Actions also installs server dependencies, runs these tests, builds/lints the Android app and uploads a debug APK. A live end-to-end check requires your own WhatsApp linking and tailnet: send from the app, confirm in WhatsApp, reply from another account, and confirm it appears after the next poll. Disconnect Tailscale and verify the app reports a connection failure.
 
-Eight API integration tests pass locally and in CI. GitHub Actions builds and lints Android; see the [latest workflow results](https://github.com/divkakwani/chat-relay/actions/workflows/check.yml). A live WhatsApp/Tailscale session still requires your own linked account and devices.
+Eight API integration tests and four WhatsApp compatibility regression tests cover the server. GitHub Actions builds and lints Android; see the [latest workflow results](https://github.com/divkakwani/chat-relay/actions/workflows/check.yml). A live WhatsApp/Tailscale session still requires your own linked account and devices.
 
 ### Dependency status
 
@@ -159,6 +160,8 @@ All requests require `Authorization: Bearer <RELAY_TOKEN>`; errors are JSON `{ "
 URL-encode the serialized WhatsApp chat ID, such as `123456789%40c.us`. Non-status endpoints return 503 until WhatsApp is ready. The provider adapter is isolated in `server/src/whatsapp.js` for future messaging integrations.
 
 ## References
+
+The server includes a targeted compatibility shim for [upstream message-key rename issue #201845](https://github.com/wwebjs/whatsapp-web.js/issues/201845). It restores the legacy field and message serialization without changing `node_modules` or dropping chats.
 
 - [whatsapp-web.js Client API](https://docs.wwebjs.dev/Client.html), [Chat API](https://docs.wwebjs.dev/Chat.html) and [LocalAuth](https://docs.wwebjs.dev/LocalAuth.html).
 - [Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve) and [Serve CLI](https://tailscale.com/docs/reference/tailscale-cli/serve).
