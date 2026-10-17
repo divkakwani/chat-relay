@@ -1,0 +1,12 @@
+node_modules/
+.env
+.wwebjs_auth/
+.wwebjs_cache/
+server/.wwebjs_auth/
+server/.wwebjs_cache/
+android/.gradle/
+android/local.properties
+**/build/
+*.iml
+.idea/
+.DS_Store
