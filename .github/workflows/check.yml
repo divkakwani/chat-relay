@@ -31,9 +31,42 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v4
-      - run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
-      - run: ./gradlew :app:assembleDebug :app:lintDebug
+      - name: Prepare Android SDK
+        shell: bash
+        run: |
+          relay_sdk="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          relay_sdkmanager="$relay_sdk/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$relay_sdkmanager" ]; then
+            relay_sdk="$RUNNER_TEMP/chat-relay-android-sdk"
+            mkdir -p "$relay_sdk/cmdline-tools"
+            curl --fail --location --retry 3 https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o "$RUNNER_TEMP/android-tools.zip"
+            unzip -q "$RUNNER_TEMP/android-tools.zip" -d "$relay_sdk/cmdline-tools"
+            mv "$relay_sdk/cmdline-tools/cmdline-tools" "$relay_sdk/cmdline-tools/latest"
+            relay_sdkmanager="$relay_sdk/cmdline-tools/latest/bin/sdkmanager"
+          fi
+          echo "ANDROID_HOME=$relay_sdk" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$relay_sdk" >> "$GITHUB_ENV"
+          yes | "$relay_sdkmanager" --licenses > /dev/null || true
+          "$relay_sdkmanager" "platforms;android-35" "build-tools;35.0.0"
+      - name: Build and lint Android
         working-directory: android
+        shell: bash
+        run: |
+          set +e
+          ./gradlew :app:assembleDebug :app:lintDebug --stacktrace > build.log 2>&1
+          relay_build_status=$?
+          cat build.log
+          if [ "$relay_build_status" -ne 0 ]; then
+            python3 - <<'PYTHON'
+          from pathlib import Path
+          lines = Path('build.log').read_text().splitlines()
+          for line in lines:
+              if 'error:' in line.lower() or 'what went wrong' in line.lower() or 'failed' in line.lower() or 'sdk' in line.lower():
+                  escaped = line.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+                  print('::error::' + escaped)
+          PYTHON
+          fi
+          exit "$relay_build_status"
       - uses: actions/upload-artifact@v4
         with:
           name: chat-relay-debug-apk
