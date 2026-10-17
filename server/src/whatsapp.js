@@ -1,9 +1,16 @@
 import whatsapp from 'whatsapp-web.js';
 import qr from 'qrcode-terminal';
+import { installBindingRecovery } from './startup.js';
 import { installWhatsAppCompatibility } from './whatsapp-compat.js';
 import { downloadWhatsAppMedia } from './whatsapp-media.js';
 import { MAX_MEDIA_BYTES, MEDIA_TYPES, downloadAvatar, problem } from './media.js';
 const { Client, LocalAuth, MessageMedia } = whatsapp;
+class RelayWhatsAppClient extends Client {
+  async inject() {
+    installBindingRecovery(this.pupPage, error => this.emit('relay_startup_error', error));
+    return super.inject();
+  }
+}
 const serialize = m => ({
   id: m.id._serialized, text: m.body || '', fromMe: m.fromMe,
   timestamp: m.timestamp, author: m.author || '', type: m.type,
@@ -15,7 +22,7 @@ export function createWhatsApp({ client: suppliedClient } = {}) {
   const callEvents = new Map();
   const avatars = new Map();
   let avatarBytes = 0;
-  const client = suppliedClient || new Client({
+  const client = suppliedClient || new RelayWhatsAppClient({
     authStrategy: new LocalAuth({ dataPath: '.wwebjs_auth' }),
     puppeteer: { headless: true, ...(process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : {}) }
   });
@@ -24,7 +31,17 @@ export function createWhatsApp({ client: suppliedClient } = {}) {
     console.log('Link WhatsApp: open Settings → Linked devices → Link a device, then scan:');
     qr.generate(code, { small: true });
   });
-  client.on('authenticated', () => { state = 'syncing'; });
+  client.on('authenticated', () => {
+    if (state !== 'ready') state = 'syncing';
+    console.log('WhatsApp authenticated. Preparing message and call handlers…');
+  });
+  client.on('loading_screen', percent => { console.log(`WhatsApp loading: ${percent}%`); });
+  client.on('relay_startup_error', error => {
+    state = 'initialization_error';
+    // This callback receives no message data or credentials.
+    console.error(`WhatsApp startup failed: ${String(error?.message || error).slice(0, 600)}`);
+    console.error('Restart the server. Your linked-device session is preserved.');
+  });
   client.on('ready', () => { state = 'ready'; console.log('WhatsApp is ready.'); });
   client.on('auth_failure', () => { state = 'auth_failure'; console.error('WhatsApp authentication failed. Restart to link again.'); });
   client.on('disconnected', () => { state = 'disconnected'; console.error('WhatsApp disconnected. Restart the server to reconnect.'); });
