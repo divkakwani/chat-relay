@@ -1,15 +1,21 @@
 import whatsapp from 'whatsapp-web.js';
 import qr from 'qrcode-terminal';
 import { installWhatsAppCompatibility } from './whatsapp-compat.js';
-const { Client, LocalAuth } = whatsapp;
+import { downloadWhatsAppMedia } from './whatsapp-media.js';
+import { MAX_MEDIA_BYTES, MEDIA_TYPES, downloadAvatar, problem } from './media.js';
+const { Client, LocalAuth, MessageMedia } = whatsapp;
 const serialize = m => ({
   id: m.id._serialized, text: m.body || '', fromMe: m.fromMe,
   timestamp: m.timestamp, author: m.author || '', type: m.type,
-  hasMedia: m.hasMedia, ack: m.ack
+  hasMedia: m.hasMedia, ack: m.ack, mimetype: m._data?.mimetype || '',
+  filename: m._data?.filename || '', filesize: m._data?.size || 0
 });
-export function createWhatsApp() {
+export function createWhatsApp({ client: suppliedClient } = {}) {
   let state = 'starting';
-  const client = new Client({
+  const callEvents = new Map();
+  const avatars = new Map();
+  let avatarBytes = 0;
+  const client = suppliedClient || new Client({
     authStrategy: new LocalAuth({ dataPath: '.wwebjs_auth' }),
     puppeteer: { headless: true, ...(process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : {}) }
   });
@@ -22,6 +28,10 @@ export function createWhatsApp() {
   client.on('ready', () => { state = 'ready'; console.log('WhatsApp is ready.'); });
   client.on('auth_failure', () => { state = 'auth_failure'; console.error('WhatsApp authentication failed. Restart to link again.'); });
   client.on('disconnected', () => { state = 'disconnected'; console.error('WhatsApp disconnected. Restart the server to reconnect.'); });
+  client.on('incoming_call', call => {
+    callEvents.set(String(call.id), { call, receivedAt: Date.now(), rejected: false });
+    while (callEvents.size > 100) callEvents.delete(callEvents.keys().next().value);
+  });
   // Recheck before operations so reinjected utilities after a page reload
   // also receive the compatibility fix. Never retry sends automatically.
   const compatible = async operation => {
@@ -29,7 +39,7 @@ export function createWhatsApp() {
     return operation();
   };
   return {
-    status: () => ({ ready: state === 'ready', state, provider: 'whatsapp' }),
+    status: () => ({ ready: state === 'ready', state, provider: 'whatsapp', account: state === 'ready' ? { id: client.info?.wid?._serialized || '', name: client.info?.pushname || 'You' } : null }),
     start: () => client.initialize(),
     stop: () => client.destroy(),
     chats: () => compatible(async () => (await client.getChats()).filter(c => /@(c\.us|g\.us|lid)$/.test(c.id._serialized)).map(c => ({
@@ -39,6 +49,51 @@ export function createWhatsApp() {
     })).sort((a, b) => b.timestamp - a.timestamp)),
     messages: id => compatible(async () => (await (await client.getChatById(id)).fetchMessages({ limit: 60 })).map(serialize).sort((a, b) => a.timestamp - b.timestamp)),
     read: id => compatible(async () => (await client.getChatById(id)).sendSeen()),
-    send: (id, text) => compatible(async () => serialize(await client.sendMessage(id, text)))
+    send: (id, text) => compatible(async () => serialize(await client.sendMessage(id, text))),
+    sendMedia: (id, media) => compatible(async () => serialize(await client.sendMessage(id,
+      new MessageMedia(media.mimetype, media.data, media.filename, media.size),
+      { caption: media.caption }
+    ))),
+    media: (id, messageId) => compatible(async () => {
+      const message = await client.getMessageById(messageId);
+      if (!message || !message.hasMedia || (await message.getChat()).id._serialized !== id) throw problem(404, 'Attachment not found in this conversation.');
+      if (message._data?.size > MAX_MEDIA_BYTES) throw problem(413, 'This attachment exceeds the 16 MiB download limit.');
+      const attachment = await client.pupPage.evaluate(downloadWhatsAppMedia, { messageId, maxBytes: MAX_MEDIA_BYTES });
+      if (attachment?.error === 'too_large') throw problem(413, 'This attachment exceeds the 16 MiB download limit.');
+      if (!attachment?.data) throw problem(410, 'Attachment expired or is unavailable on this linked device.');
+      if (!MEDIA_TYPES.has(attachment.mimetype)) throw problem(415, 'This attachment format is not supported yet.');
+      const bytes = Buffer.from(attachment.data, 'base64');
+      if (bytes.length > MAX_MEDIA_BYTES) throw problem(413, 'This attachment exceeds the 16 MiB download limit.');
+      return { bytes, mimetype: attachment.mimetype };
+    }),
+    avatar: async id => {
+      const cached = avatars.get(id);
+      if (cached && cached.until > Date.now()) return cached.value;
+      if (cached) { avatarBytes -= cached.value?.bytes.length || 0; avatars.delete(id); }
+      const url = await client.getProfilePicUrl(id);
+      const value = url ? await downloadAvatar(url) : null;
+      avatars.set(id, { until: Date.now() + 10 * 60 * 1000, value });
+      avatarBytes += value?.bytes.length || 0;
+      while (avatars.size > 100 || avatarBytes > 16 * 1024 * 1024) {
+        const first = avatars.keys().next().value;
+        avatarBytes -= avatars.get(first).value?.bytes.length || 0; avatars.delete(first);
+      }
+      return value;
+    },
+    calls: () => [...callEvents.values()].reverse().map(({ call, receivedAt, rejected }) => ({
+      id: String(call.id), from: call.from, fromMe: call.fromMe, isVideo: call.isVideo,
+      isGroup: call.isGroup, timestamp: call.timestamp || Math.floor(receivedAt / 1000),
+      status: rejected ? 'declined' : 'received', canReject: !rejected && !call.fromMe && Date.now() - receivedAt < 45000
+    })),
+    rejectCall: async id => {
+      const event = callEvents.get(id);
+      if (!event || event.rejected || event.call.fromMe || Date.now() - event.receivedAt > 45000) throw problem(409, 'This call can no longer be declined.');
+      await event.call.reject(); event.rejected = true;
+    },
+    callLink: async type => {
+      const url = await client.createCallLink(new Date(), type);
+      if (!url || !url.startsWith('https://call.whatsapp.com/' + type + '/')) throw problem(502, 'WhatsApp could not create a call link. Open WhatsApp to call instead.');
+      return url;
+    }
   };
 }

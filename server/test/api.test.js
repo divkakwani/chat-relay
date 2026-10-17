@@ -77,3 +77,48 @@ test('preserves Unicode split across transport chunks', async t => {
   assert.equal((await request('/api/chats/123%40c.us/messages', { method: 'POST', body: stream, duplex: 'half' })).status, 201);
   assert.deepEqual(calls, [['123@c.us', 'Hello 👋 नमस्ते']]);
 });
+
+const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=', 'base64');
+test('authenticates binary media and profile photos; keeps them out of caches', async t => {
+  const { request } = await fixture(t, { avatar: async () => ({ bytes: png, mimetype: 'image/png' }), media: async () => ({ bytes: png, mimetype: 'image/png' }) });
+  for (const path of ['/api/chats/123%40c.us/avatar', '/api/chats/123%40c.us/media/false_123%40c.us_key']) {
+    assert.equal((await request(path, { headers: { Authorization: '' } })).status, 401);
+    const response = await request(path);
+    assert.equal(response.status, 200); assert.equal(response.headers.get('content-type'), 'image/png');
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), png);
+  }
+});
+test('sends validated image and video attachments with captions', async t => {
+  const sent = [];
+  const { request } = await fixture(t, { sendMedia: async (id, media) => { sent.push({ id, media }); return { id: 'sent', text: media.caption }; } });
+  for (const [mimetype, bytes] of [['image/png', png], ['video/mp4', Buffer.from('000000186674797069736f6d', 'hex')]]) {
+    const r = await request('/api/chats/123%40c.us/media', { method: 'POST', body: JSON.stringify({ mimetype, data: bytes.toString('base64'), filename: '../clip', caption: 'hello' }) });
+    assert.equal(r.status, 201); assert.equal((await r.json()).message.text, 'hello');
+  }
+  assert.equal(sent.length, 2); assert.equal(sent[0].media.size, png.length); assert.ok(!sent[0].media.filename.includes('/'));
+});
+test('rejects unsupported, mismatched and malformed attachment payloads before sending', async t => {
+  let sends = 0;
+  const { request } = await fixture(t, { sendMedia: async () => { sends++; } });
+  const valid = { mimetype: 'image/png', data: png.toString('base64') };
+  for (const [body, code] of [[null,415], [{ ...valid, mimetype:'image/svg+xml' },415], [{ ...valid, mimetype:'image/jpeg' },415], [{ ...valid, data:'AB==' },400], [{ ...valid, caption:{} },400], [{ ...valid, caption:'x'.repeat(4097) },400]]) {
+    const response = await request('/api/chats/123%40c.us/media', { method:'POST', body:JSON.stringify(body) }); assert.equal(response.status,code);
+  }
+  assert.equal(sends,0);
+});
+test('returns profile privacy and attachment expiry errors without crashing', async t => {
+  const { request } = await fixture(t, { avatar: async () => null, media: async () => { throw Object.assign(new Error('Attachment expired'), { status:410 }); } });
+  assert.equal((await request('/api/chats/123%40c.us/avatar')).status,404);
+  assert.equal((await request('/api/chats/123%40c.us/media/false_123%40c.us_key')).status,410);
+});
+test('exposes call capabilities and events, validates call links, and declines only by explicit POST', async t => {
+  const declined = [];
+  const { request } = await fixture(t, { calls: () => [{ id:'call1', isVideo:true }], callLink: async type => 'https://call.whatsapp.com/'+type+'/test', rejectCall: async id => declined.push(id) });
+  const status = await (await request('/api/status')).json(); assert.equal(status.capabilities.nativeCalling,false);
+  assert.equal((await (await request('/api/calls')).json()).calls[0].isVideo,true);
+  assert.equal((await request('/api/call-links',{method:'POST',body:JSON.stringify({type:'invalid'})})).status,400);
+  const link = await request('/api/call-links',{method:'POST',body:JSON.stringify({type:'video'})}); assert.equal(link.status,201);
+  assert.equal((await link.json()).url,'https://call.whatsapp.com/video/test');
+  assert.equal((await request('/api/calls/call1/reject',{method:'POST'})).status,200); assert.deepEqual(declined,['call1']);
+});

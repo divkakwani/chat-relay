@@ -4,7 +4,7 @@ const relay = createWhatsApp();
 const server = createApi({ token: process.env.RELAY_TOKEN, relay });
 const port = Number(process.env.PORT || 3000);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid PORT');
-server.requestTimeout = 30000;
+server.requestTimeout = 120000;
 server.headersTimeout = 15000;
 server.listen(port, '127.0.0.1', () => {
   console.log(`Chat Relay listening on http://127.0.0.1:${port}. Use Tailscale Serve for phone access.`);

@@ -2,7 +2,7 @@
 
 A personal WhatsApp relay: WhatsApp Web runs on your computer, and a native Android app reads and sends messages over your private Tailscale network.
 
-The Android UI uses an original cream-and-teal palette, rounded initial avatars, a searchable conversation list, unread counts and simple message bubbles. There are no “All / Unread / Groups” filter tabs, WhatsApp logos, or copied artwork. This is an independent project, unaffiliated with WhatsApp or Meta; visual differences are not a legal clearance.
+The Android UI follows the supplied `chatrelay.` design: an off-white/sage palette, bundled Inter typography, profile photos, DMs/Groups/Calls tabs, and light/dark/system appearance. The launcher uses an original speech-bubble and relay-arrow adaptive icon, including an Android 13 themed variant. This is an independent project, unaffiliated with WhatsApp or Meta.
 
 ## How it connects
 
@@ -105,14 +105,56 @@ Open [Build and test](https://github.com/divkakwani/chat-relay/actions/workflows
 
 Every push runs the build. To create a fresh APK without changing code, select **Run workflow** on that Actions page. This produces a debug APK for personal testing. The computer relay and Tailscale setup above are still required.
 
-## Included behavior and limits
+## Updating from version 1.0
 
-- Personal and group conversations, search by name or last-message text, timestamps and unread counts.
-- Latest 60 available messages per conversation, incoming/outgoing bubbles, group sender IDs, text sends up to 4096 characters, and marking a conversation read when opened.
-- Foreground polling every four seconds; polling stops when the activity is paused. There are no background notifications yet.
-- Media captions can be read, but attachments are shown as placeholders. Media upload/download, calls, reactions, starting chats with new contacts, and older-history pagination are not implemented.
-- Message history is fetched from WhatsApp through the server; the Android app does not persist a local message database. Unsaved drafts are lost on navigation/recreation. Screenshots and Android backups are disabled.
-- A timed-out send can still have reached WhatsApp. The client keeps the text and warns you to check the conversation before retrying; it never automatically retries sends.
+Install the latest `chat-relay-debug-apk` build and **restart the server with the updated code**. Your saved server address, access token and WhatsApp link remain usable. The new Android app needs the new server endpoints for media, profile photos and calls.
+
+```sh
+# From the repository root
+git pull
+cd server
+npm ci
+# Stop the old server with Ctrl+C in its terminal, then:
+npm start
+```
+
+If your Puppeteer browser cache is incomplete, you can use the Chrome already installed on your computer. For macOS, put this in `server/.env`:
+
+```dotenv
+CHROME_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+```
+
+Then install dependencies using `PUPPETEER_SKIP_DOWNLOAD=true npm ci`. Do not use that option unless you have configured an existing browser.
+
+## Photos, videos and appearance
+
+- Profile photos are loaded on demand through the authenticated relay, respecting WhatsApp's profile-photo privacy settings. Initials appear when a photo is private or unavailable. Profile photos are cached on the server for ten minutes within a 16 MiB memory budget.
+- Received photos appear inside message bubbles; tap to open a larger view. Tap a video tile to download it and play it with native playback controls.
+- Tap the paperclip, choose a photo/video, review its preview and optional caption, then tap **Send**. File selection uses Android's document picker and does not require access to your whole photo library.
+- Supported attachment formats: JPEG, PNG, WebP, GIF, MP4 and WebM, up to **16 MiB per file** in each direction. Upload MIME types and file signatures are checked. Videos require a codec supported by the server's Chrome and the phone. GIFs currently display as a still frame.
+- View-once messages are not downloaded. Expired or unavailable attachments display an error when opened. Other documents/audio attachments still require WhatsApp.
+- Tap your profile circle in the inbox, then select **Light**, **Dark**, or **System**. System mode follows Android's device setting. All themes use the bundled, openly licensed Inter font; the license is included in the app assets.
+- The compose button starts a conversation with an international WhatsApp phone number. Existing chats can be searched by name or preview. Draft text is retained in memory when navigating between chats and across recreation of the current conversation.
+
+Media requests require the bearer token. CDN profile-photo URLs are kept behind the server instead of exposing them to Android. The server sends media with `Cache-Control: no-store`. Android keeps bounded image thumbnails in memory; videos are stored in the app's private cache for playback and removed when the viewer closes. Android screenshots and backups are disabled in normal app builds.
+
+## Voice and video calls
+
+**Calls run in the official WhatsApp app, as selected for this project.** The upstream web library has no supported API to initiate/answer calls or transport call audio/video into this Android relay.
+
+- Tap a voice/video icon in a conversation and choose **Open WhatsApp**. Open that conversation there and tap WhatsApp's call button. For phone-number chats, the relay opens the contact through WhatsApp's click-to-chat link. For groups or LID-only chats, it opens WhatsApp so you can select the conversation.
+- You can also choose **Create link**, then open or share the voice/video call link. Creating a link does not place a call or automatically message anyone.
+- Incoming voice/video call events appear in **Calls** and trigger a dialog while Chat Relay is open. You can open WhatsApp or explicitly decline a recent incoming call.
+- The call list holds up to 100 events received since the server started. It is not your full WhatsApp call history, and does not claim a call is still ringing or connected. Decline requests may fail if the caller already hung up.
+- Background ringing, answering inside Chat Relay, and relaying microphone/camera streams are **not supported**. Keep the official WhatsApp app installed for those features.
+
+## Other behavior and limits
+
+- Latest 60 available messages per conversation; older-history pagination, reactions and audio messaging are not implemented.
+- Text/captions up to 4096 characters, day separators, group sender IDs, delivery/read indicators, and marking a conversation read when opened.
+- Foreground polling every four seconds; polling stops when the activity is paused. There are no background message notifications yet.
+- No persistent local message database. Other drafts may be lost if Android kills the process. Attachment selections must be chosen again after recreation.
+- A timed-out send can still have reached WhatsApp. The client keeps the text and warns you to check the conversation before retrying; sends are never automatically retried.
 - The relay terminates message access on your computer and phone. Tailscale encrypts the network leg; this is not a claim of additional end-to-end encryption between these two apps.
 
 ## Troubleshooting
@@ -137,9 +179,9 @@ npm test
 
 The server integration suite uses a fake WhatsApp adapter and real loopback HTTP. It covers authentication, readiness, chat/history reads, read receipts, sending, payload limits, invalid IDs, Unicode transport handling and sanitized upstream errors. It needs no WhatsApp account or Chrome.
 
-GitHub Actions also installs server dependencies, runs these tests, builds/lints the Android app and uploads a debug APK. A live end-to-end check requires your own WhatsApp linking and tailnet: send from the app, confirm in WhatsApp, reply from another account, and confirm it appears after the next poll. Disconnect Tailscale and verify the app reports a connection failure.
+GitHub Actions also runs these tests, builds/lints the Android app and uploads a debug APK. A separate Android emulator job checks appearance modes, recreation and draft navigation using synthetic contacts, then uploads UI screenshots and test reports as `chat-relay-ui-checks`. No real account or token is used in emulator tests. A live end-to-end check requires your own WhatsApp linking and tailnet: send from the app, confirm in WhatsApp, reply from another account, and confirm it appears after the next poll. Disconnect Tailscale and verify the app reports a connection failure.
 
-Eight API integration tests and four WhatsApp compatibility regression tests cover the server. GitHub Actions builds and lints Android; see the [latest workflow results](https://github.com/divkakwani/chat-relay/actions/workflows/check.yml). A live WhatsApp/Tailscale session still requires your own linked account and devices.
+The server suite includes API integration, message-key serialization, uncached-media MIME handling, upload limits/type validation, profile-proxy restrictions, conversation ownership and call-event regression tests. GitHub Actions builds and lints Android; see the [latest workflow results](https://github.com/divkakwani/chat-relay/actions/workflows/check.yml). Profile-photo and received-photo downloads were also checked against a linked WhatsApp session, reporting only content types and byte counts. Outgoing media and live call handoffs still need a check on your phone.
 
 ### Dependency status
 
@@ -153,6 +195,12 @@ All requests require `Authorization: Bearer <RELAY_TOKEN>`; errors are JSON `{ "
 | --- | --- | --- |
 | GET | `/api/status` | WhatsApp ready flag and connection state |
 | GET | `/api/chats` | `{ chats: [...] }`, newest first |
+| GET | `/api/chats/:id/avatar` | Authenticated profile-photo bytes, or 404 when unavailable/private |
+| GET | `/api/chats/:id/media/:messageId` | Authenticated attachment bytes, up to 16 MiB |
+| POST | `/api/chats/:id/media` | JSON `{ "mimetype": "image/jpeg", "data": "base64…", "filename": "photo.jpg", "caption": "Optional" }` |
+| GET | `/api/calls` | Incoming/outgoing call events received during the current server session |
+| POST | `/api/calls/:id/reject` | Explicitly decline a recent incoming call |
+| POST | `/api/call-links` | Body `{ "type": "voice" }` or `{ "type": "video" }`; returns `{ "url": "https://call.whatsapp.com/…" }` |
 | GET | `/api/chats/:id/messages` | `{ messages: [...] }`, oldest first, latest 60 |
 | POST | `/api/chats/:id/messages` | Body `{ "text": "Hello" }`; 201 with `{ message: {...} }` |
 | POST | `/api/chats/:id/read` | Mark conversation seen |
@@ -161,7 +209,7 @@ URL-encode the serialized WhatsApp chat ID, such as `123456789%40c.us`. Non-stat
 
 ## References
 
-The server includes a targeted compatibility shim for [upstream message-key rename issue #201845](https://github.com/wwebjs/whatsapp-web.js/issues/201845). It restores the legacy field and message serialization without changing `node_modules` or dropping chats.
+The server forwards declared MIME types to the WhatsApp download manager to handle [uncached-media issue #201908](https://github.com/wwebjs/whatsapp-web.js/issues/201908). It also includes a targeted compatibility shim for [upstream message-key rename issue #201845](https://github.com/wwebjs/whatsapp-web.js/issues/201845). It restores the legacy field and message serialization without changing `node_modules` or dropping chats.
 
 - [whatsapp-web.js Client API](https://docs.wwebjs.dev/Client.html), [Chat API](https://docs.wwebjs.dev/Chat.html) and [LocalAuth](https://docs.wwebjs.dev/LocalAuth.html).
 - [Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve) and [Serve CLI](https://tailscale.com/docs/reference/tailscale-cli/serve).

@@ -20,17 +20,17 @@ export function installWhatsAppCompatibility() {
       });
     }
   }
-  if (!utils.__chatRelayMessageKeys) {
+  if (utils.__chatRelayMessageKeys !== 2) {
     const original = utils.getMessageModel;
     utils.getMessageModel = function (...args) {
       const model = original.apply(this, args);
       // Puppeteer serializes own properties, so the prototype getter alone
       // does not provide _serialized on messages returned to Node.js.
-      if (model?.id && !model.id._serialized && typeof model.id.$1 === 'string') {
+      if (model?.id && !Object.prototype.hasOwnProperty.call(model.id, '_serialized') && typeof model.id.$1 === 'string') {
         model.id = { ...model.id, _serialized: model.id.$1 };
       }
       return model;
     };
-    utils.__chatRelayMessageKeys = true;
+    utils.__chatRelayMessageKeys = 2;
   }
 }

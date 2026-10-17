@@ -50,3 +50,9 @@ test('reports missing injected utilities instead of pretending WhatsApp is ready
   evaluate('window.WWebJS = undefined');
   assert.throws(install, /still loading/);
 });
+test('materializes inherited message-key aliases before Puppeteer serialization', () => {
+  const { install, evaluate } = fixture();
+  evaluate('window.WWebJS.getMessageModel = message => ({ id: message.id })');
+  install();
+  assert.equal(evaluate(`JSON.parse(JSON.stringify(window.WWebJS.getMessageModel({ id: key }))).id._serialized`), 'message-key');
+});

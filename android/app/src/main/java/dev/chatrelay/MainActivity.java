@@ -1,249 +1,378 @@
 package dev.chatrelay;
 
-import android.app.Activity;
-import android.os.Bundle;
-import android.os.Handler;
-import android.os.Looper;
-import android.graphics.Color;
-import android.graphics.Typeface;
+import android.app.*;
+import android.os.*;
+import android.content.*;
+import android.content.res.Configuration;
+import android.database.Cursor;
+import android.net.Uri;
+import android.provider.OpenableColumns;
+import android.graphics.*;
 import android.graphics.drawable.GradientDrawable;
-import android.view.Gravity;
-import android.view.View;
-import android.view.WindowManager;
+import android.view.*;
+import android.view.inputmethod.InputMethodManager;
 import android.widget.*;
-import android.text.Editable;
-import android.text.TextWatcher;
+import android.text.*;
+import android.text.style.*;
 import org.json.*;
-import java.net.*;
+import java.net.URI;
 import java.io.*;
-import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.*;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.*;
 
 public class MainActivity extends Activity {
-    private final int ink = Color.rgb(28, 48, 43), teal = Color.rgb(23, 107, 98), muted = Color.rgb(113, 127, 120), paper = Color.rgb(248, 250, 247);
+    private int ink, green, muted, paper, surface, line, outgoing, errorColor;
+    private boolean dark, active, fetching, sending, stickyError, firstSync = true;
+    private Typeface regular, medium, bold;
     private final Handler handler = new Handler(Looper.getMainLooper());
-    private final ExecutorService worker = Executors.newSingleThreadExecutor();
-    private LinearLayout root, content;
+    private final ExecutorService worker = Executors.newFixedThreadPool(2);
+    private ImageLoader images = new ImageLoader();
+    private LinearLayout root, messageList, tabs;
     private TextView status;
     private EditText search, composer;
+    private ListView list;
     private ScrollView scroll;
-    private String base = "", token = "", screen = "", chatId = "", chatName = "", rendered = "";
-    private JSONArray chats = new JSONArray();
-    private boolean active, fetching, sending;
+    private FrameLayout myAvatar;
+    private ChatAdapter adapter;
+    private RelayApi api;
+    private String base = "", token = "", screen = "", chatId = "", chatName = "", rendered = "", inboxSnapshot = "", tab = "DMs", query = "", accountId = "", accountName = "You", pickerChat = "";
+    private JSONArray chats = new JSONArray(), calls = new JSONArray();
+    private final Map<String,String> drafts = new HashMap<>();
+    private final Set<String> seenCalls = new HashSet<>();
     private int generation;
-    private final Runnable poll = new Runnable() {
-        @Override public void run() { if (active) { refresh(); handler.postDelayed(this, 4000); } }
-    };
-    interface Result { void done(JSONObject data); }
+    private AlertDialog incomingDialog;
+    private final Runnable poll = new Runnable() { public void run() { if (active) { refresh(); handler.postDelayed(this, 4000); } } };
+    interface Result { void done(JSONObject result); }
 
-    @Override public void onCreate(Bundle state) {
-        super.onCreate(state);
-        getWindow().setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE);
-        base = getSharedPreferences("relay", 0).getString("url", "");
-        try { token = SecretStore.load(this); } catch (Exception e) { token = ""; }
-        if (base.isEmpty() || token.isEmpty()) settings(); else inbox();
+    @Override public void onCreate(Bundle saved) {
+        configureTheme(); super.onCreate(saved);
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        try {
+            regular = new Typeface.Builder(getAssets(), "fonts/Inter.ttf").setFontVariationSettings("'wght' 400, 'opsz' 14").build();
+            medium = new Typeface.Builder(getAssets(), "fonts/Inter.ttf").setFontVariationSettings("'wght' 550, 'opsz' 14").build();
+            bold = new Typeface.Builder(getAssets(), "fonts/Inter.ttf").setFontVariationSettings("'wght' 700, 'opsz' 24").build();
+        } catch (Exception e) { regular = Typeface.create("sans-serif",0); medium = Typeface.create("sans-serif-medium",0); bold = Typeface.create("sans-serif",1); }
+        base = getSharedPreferences("relay",0).getString("url","");
+        try { token = SecretStore.load(this); } catch (Exception ignored) {}
+        api = new RelayApi(base,token);
+        if (saved != null) {
+            tab = saved.getString("tab","DMs"); query = saved.getString("query",""); pickerChat = saved.getString("pickerChat","");
+            chatId = saved.getString("chatId",""); chatName = saved.getString("chatName","");
+            drafts.put(chatId, saved.getString("draft",""));
+        }
+        if (base.isEmpty() || token.isEmpty()) settings();
+        else if (saved != null && saved.getString("screen","").equals("chat")) openChat(chatId,chatName);
+        else if (saved != null && saved.getString("screen","").equals("settings")) settings();
+        else inbox();
     }
-    @Override protected void onResume() { super.onResume(); active = true; handler.post(poll); }
+    private void configureTheme() {
+        String mode = getSharedPreferences("relay",0).getString("theme","system");
+        dark = mode.equals("dark") || (mode.equals("system") && (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES);
+        setTheme(dark ? R.style.AppThemeDark : R.style.AppTheme);
+        ink = dark ? 0xffedf1e9 : 0xff20271f; green = dark ? 0xffa6c49a : 0xff3e643b;
+        muted = dark ? 0xffa1ac9a : 0xff76806f; paper = dark ? 0xff131912 : 0xfffcfcf7;
+        surface = dark ? 0xff222c20 : 0xffedf1e7; line = dark ? 0xff303b2b : 0xffe1e6da;
+        outgoing = dark ? 0xff31432c : 0xffe4eddb; errorColor = dark ? 0xffffb4a6 : 0xff9d3528;
+    }
+    @Override protected void onSaveInstanceState(Bundle state) {
+        super.onSaveInstanceState(state); state.putString("screen",screen); state.putString("tab",tab); state.putString("query",query);
+        state.putString("chatId",chatId); state.putString("chatName",chatName); state.putString("pickerChat",pickerChat);
+        state.putString("draft",composer != null ? composer.getText().toString() : drafts.getOrDefault(chatId,""));
+    }
+    @Override protected void onResume() { super.onResume(); active = true; handler.removeCallbacks(poll); handler.post(poll); }
     @Override protected void onPause() { active = false; handler.removeCallbacks(poll); super.onPause(); }
-    @Override protected void onDestroy() { generation++; worker.shutdownNow(); super.onDestroy(); }
-    @Override public void onBackPressed() {
-        if (screen.equals("chat")) inbox();
-        else if (screen.equals("settings") && !token.isEmpty()) inbox();
-        else super.onBackPressed();
-    }
+    @Override protected void onDestroy() { generation++; if (incomingDialog != null) incomingDialog.dismiss(); images.close(); worker.shutdownNow(); super.onDestroy(); }
+    @Override public void onBackPressed() { if (!screen.equals("inbox") && !token.isEmpty()) inbox(); else super.onBackPressed(); }
     private int dp(float n) { return Math.round(n * getResources().getDisplayMetrics().density); }
-    private GradientDrawable bg(int color, int radius) {
-        GradientDrawable shape = new GradientDrawable(); shape.setColor(color); shape.setCornerRadius(dp(radius)); return shape;
-    }
-    private TextView text(String value, int size, int color, boolean bold) {
-        TextView v = new TextView(this); v.setText(value); v.setTextSize(size); v.setTextColor(color);
-        if (bold) v.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        return v;
-    }
-    private LinearLayout column() { LinearLayout v = new LinearLayout(this); v.setOrientation(LinearLayout.VERTICAL); return v; }
+    private GradientDrawable bg(int color, int radius) { GradientDrawable d = new GradientDrawable(); d.setColor(color); d.setCornerRadius(dp(radius)); return d; }
+    private void pad(View view, int h, int v) { view.setPadding(dp(h),dp(v),dp(h),dp(v)); }
+    private LinearLayout col() { LinearLayout v = new LinearLayout(this); v.setOrientation(LinearLayout.VERTICAL); return v; }
     private LinearLayout row() { LinearLayout v = new LinearLayout(this); v.setGravity(Gravity.CENTER_VERTICAL); return v; }
-    private void padding(View v, int h, int y) { v.setPadding(dp(h), dp(y), dp(h), dp(y)); }
-    private LinearLayout.LayoutParams weight() { return new LinearLayout.LayoutParams(0, -2, 1); }
-    private TextView action(String label, Runnable run) {
-        TextView v = text(label, 15, teal, true); padding(v, 14, 14); v.setMinHeight(dp(48)); v.setGravity(Gravity.CENTER); v.setOnClickListener(w -> run.run()); return v;
+    private LinearLayout.LayoutParams weight() { return new LinearLayout.LayoutParams(0,-2,1); }
+    private TextView text(String value, int size, int color, boolean strong) {
+        TextView v = new TextView(this); v.setText(value); v.setTextSize(size); v.setTextColor(color); v.setTypeface(strong ? medium : regular); v.setIncludeFontPadding(false); v.setLineSpacing(dp(3),1); return v;
     }
+    private TextView action(String label, Runnable run) { TextView v = text(label,14,green,true); pad(v,14,16); v.setMinHeight(dp(48)); v.setGravity(Gravity.CENTER); v.setOnClickListener(w -> run.run()); return v; }
+    private View icon(String name, Runnable run) { Icons v = new Icons(this,name,green); v.setLayoutParams(new LinearLayout.LayoutParams(dp(46),dp(48))); v.setOnClickListener(w -> run.run()); v.setFocusable(true); return v; }
     private void shell(String next) {
-        generation++; rendered = ""; sending = false; screen = next;
-        root = column(); root.setBackgroundColor(paper);
-        root.setOnApplyWindowInsetsListener((view, insets) -> {
-            view.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(), insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
-            return insets;
-        });
+        if (screen.equals("chat") && composer != null) drafts.put(chatId,composer.getText().toString());
+        generation++; screen = next; fetching = false; sending = false; stickyError = false; rendered = ""; inboxSnapshot = ""; composer = null; status = null;
+        root = col(); root.setBackgroundColor(paper);
+        getWindow().setStatusBarColor(paper); getWindow().setNavigationBarColor(dark || Build.VERSION.SDK_INT < 27 ? 0xff131912 : paper);
+        int flags = dark ? 0 : View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+        if (Build.VERSION.SDK_INT >= 27 && !dark) flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+        getWindow().getDecorView().setSystemUiVisibility(flags);
+        root.setOnApplyWindowInsetsListener((v,insets) -> { v.setPadding(insets.getSystemWindowInsetLeft(),insets.getSystemWindowInsetTop(),insets.getSystemWindowInsetRight(),insets.getSystemWindowInsetBottom()); return insets; });
         setContentView(root); root.requestApplyInsets();
     }
-    private void banner(String message) { if (status != null) { status.setText(message); status.setVisibility(View.VISIBLE); } }
-    private void makeStatus() {
-        status = text("Connecting to your relay…", 12, teal, false); padding(status, 24, 9); status.setBackgroundColor(Color.rgb(233, 242, 235)); root.addView(status);
+    private void statusView() { status = text("Connecting…",12,muted,false); pad(status,24,8); root.addView(status); }
+    private void banner(String value) { if (status != null) { status.setText(value); status.setTextColor(errorColor); status.setVisibility(View.VISIBLE); } }
+    private TextView wordmark() {
+        TextView v = text("chatrelay.",27,ink,false); v.setLetterSpacing(-.055f);
+        SpannableString word = new SpannableString("chatrelay.");
+        word.setSpan(new ForegroundColorSpan(green),4,10,0);
+        word.setSpan(new StyleSpan(Typeface.BOLD),0,4,0);
+        v.setText(word); return v;
+    }
+    private FrameLayout avatar(String name, String id, int size) {
+        FrameLayout frame = new FrameLayout(this); frame.setBackground(bg(surface,size/2)); frame.setClipToOutline(true);
+        TextView initials = text(initials(name),size > 45 ? 15 : 13,green,true); initials.setGravity(Gravity.CENTER); frame.addView(initials,new FrameLayout.LayoutParams(-1,-1));
+        ImageView photo = new ImageView(this); photo.setScaleType(ImageView.ScaleType.CENTER_CROP); photo.setContentDescription(name + " profile photo"); frame.addView(photo,new FrameLayout.LayoutParams(-1,-1));
+        if (!id.isEmpty() && !base.isEmpty()) images.load(api,"/api/chats/"+RelayApi.encode(id)+"/avatar",photo);
+        return frame;
+    }
+    private String initials(String name) {
+        String[] words = name.trim().split("\\s+"); if (words[0].isEmpty()) return "?";
+        String a = words[0].substring(0,words[0].offsetByCodePoints(0,1));
+        if (words.length > 1) { String last = words[words.length-1]; a += last.substring(0,last.offsetByCodePoints(0,1)); }
+        return a.toUpperCase(Locale.ROOT);
     }
     private void inbox() {
         shell("inbox");
-        LinearLayout heading = row(); padding(heading, 24, 14);
-        LinearLayout brand = column(); brand.addView(text("Chat Relay", 30, ink, true)); brand.addView(text("Your conversations, closer.", 13, muted, false));
-        heading.addView(brand, weight()); heading.addView(action("Settings", this::settings)); root.addView(heading);
-        search = new EditText(this); search.setSingleLine(); search.setTextSize(15); search.setHint("Search conversations"); search.setTextColor(ink); search.setHintTextColor(muted);
-        search.setBackground(bg(Color.rgb(235, 239, 233), 18)); padding(search, 18, 12);
-        LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-1, dp(50)); sp.setMargins(dp(24), dp(8), dp(24), dp(18)); root.addView(search, sp);
-        search.addTextChangedListener(new TextWatcher() {
-            public void beforeTextChanged(CharSequence s, int st, int c, int a) {}
-            public void onTextChanged(CharSequence s, int st, int b, int c) { renderChats(); }
-            public void afterTextChanged(Editable e) {}
-        });
-        makeStatus();
-        scroll = new ScrollView(this); scroll.setFillViewport(true); content = column(); scroll.addView(content); root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
-        TextView footer = text("◈  Tailscale + encrypted HTTPS", 11, muted, false); footer.setGravity(Gravity.CENTER); padding(footer, 12, 14); root.addView(footer);
-        renderChats(); refresh();
+        LinearLayout heading = row(); pad(heading,24,22); heading.addView(wordmark(),weight());
+        myAvatar = avatar(accountName,accountId,40); myAvatar.setContentDescription("Settings and appearance"); myAvatar.setOnClickListener(v -> settings()); heading.addView(myAvatar,new LinearLayout.LayoutParams(dp(40),dp(40))); root.addView(heading);
+        LinearLayout searchRow = row(); searchRow.setBackground(bg(surface,28)); searchRow.addView(icon("Search",() -> search.requestFocus()));
+        search = new EditText(this); search.setSingleLine(); search.setTextSize(14); search.setTypeface(regular); search.setTextColor(ink); search.setHintTextColor(muted); search.setHint("Search chats and calls"); search.setBackgroundColor(Color.TRANSPARENT); search.setPadding(0,0,dp(16),0); searchRow.addView(search,weight());
+        LinearLayout.LayoutParams sl = new LinearLayout.LayoutParams(-1,dp(50)); sl.setMargins(dp(22),0,dp(22),dp(14)); root.addView(searchRow,sl); search.setText(query);
+        search.addTextChangedListener(new TextWatcher() { public void beforeTextChanged(CharSequence s,int st,int c,int a) {} public void afterTextChanged(Editable e) {} public void onTextChanged(CharSequence s,int st,int b,int c) { query = s.toString(); renderInbox(); } });
+        tabs = row(); pad(tabs,22,0); root.addView(tabs); renderTabs();
+        statusView();
+        FrameLayout body = new FrameLayout(this); list = new ListView(this); list.setDivider(null); list.setCacheColorHint(Color.TRANSPARENT); list.setClipToPadding(false); list.setPadding(0,dp(8),0,dp(92)); list.setSelector(bg(surface,0));
+        adapter = new ChatAdapter(); list.setAdapter(adapter); body.addView(list,new FrameLayout.LayoutParams(-1,-1));
+        FrameLayout composeButton = new FrameLayout(this); composeButton.setBackground(bg(dark ? 0xffa6c49a : 0xff3e643b,21)); composeButton.setElevation(dp(6)); composeButton.setContentDescription("New conversation");
+        Icons composeIcon = new Icons(this,"Compose",dark ? paper : Color.WHITE); composeButton.addView(composeIcon,new FrameLayout.LayoutParams(-1,-1)); composeButton.setOnClickListener(v -> newConversation());
+        FrameLayout.LayoutParams fab = new FrameLayout.LayoutParams(dp(58),dp(58),Gravity.BOTTOM|Gravity.END); fab.setMargins(0,0,dp(24),dp(20)); body.addView(composeButton,fab);
+        root.addView(body,new LinearLayout.LayoutParams(-1,0,1));
+        root.setFocusableInTouchMode(true); root.requestFocus(); renderInbox(); refresh();
+    }
+    private void renderTabs() {
+        tabs.removeAllViews();
+        int unread = 0; for (int i=0;i<chats.length();i++) if (!chats.optJSONObject(i).optBoolean("isGroup") && chats.optJSONObject(i).optInt("unread")>0) unread++;
+        for (String label : new String[]{"DMs","Groups","Calls"}) {
+            LinearLayout container = col(); container.setGravity(Gravity.CENTER); boolean selected = tab.equals(label);
+            TextView title = text(label + (label.equals("DMs") && unread>0 ? "  " + unread : ""),14,selected?green:muted,true); title.setGravity(Gravity.CENTER); pad(title,0,16); container.addView(title,new LinearLayout.LayoutParams(-1,-2));
+            View underline = new View(this); underline.setBackground(bg(selected?green:line,2)); container.addView(underline,new LinearLayout.LayoutParams(-1,dp(selected?3:1)));
+            container.setOnClickListener(v -> { tab=label; renderTabs(); renderInbox(); }); tabs.addView(container,new LinearLayout.LayoutParams(0,-1,1));
+        }
     }
     private String preview(JSONObject message) {
-        if (message == null) return "Start a conversation";
+        if (message==null) return "Start a conversation";
         String value = message.optString("text");
-        if (value.isEmpty()) value = message.optBoolean("hasMedia") ? "[Media attachment]" : "[" + message.optString("type", "Message") + "]";
-        return (message.optBoolean("fromMe") ? "You: " : "") + value;
+        if (value.isEmpty()) { String mime = message.optString("mimetype"); value = mime.startsWith("video/") || message.optString("type").equals("video") ? "Video" : message.optBoolean("hasMedia") ? "Photo or attachment" : "Message"; }
+        return (message.optBoolean("fromMe")?"You: ":"")+value;
     }
     private String time(long seconds, boolean full) {
-        if (seconds <= 0) return "";
-        Date date = new Date(seconds * 1000);
-        String pattern = full ? "MMM d · HH:mm" : (System.currentTimeMillis() - seconds * 1000 > 86400000 ? "MMM d" : "HH:mm");
-        return new SimpleDateFormat(pattern, Locale.getDefault()).format(date);
+        if (seconds<=0) return ""; long days = (System.currentTimeMillis()-seconds*1000)/86400000;
+        if (!full && days==1) return "Yesterday";
+        return new SimpleDateFormat(full?"HH:mm":days<1?"HH:mm":days<7?"EEE":"MMM d",Locale.getDefault()).format(new Date(seconds*1000));
     }
-    private void renderChats() {
-        if (!screen.equals("inbox")) return;
-        content.removeAllViews();
-        String query = search.getText().toString().toLowerCase(Locale.ROOT); int count = 0;
-        for (int i = 0; i < chats.length(); i++) {
-            JSONObject chat = chats.optJSONObject(i); if (chat == null) continue;
-            String name = chat.optString("name", "Conversation");
-            if (!name.toLowerCase(Locale.ROOT).contains(query) && !preview(chat.optJSONObject("lastMessage")).toLowerCase(Locale.ROOT).contains(query)) continue;
-            count++;
-            LinearLayout item = row(); padding(item, 24, 16);
-            int[] colors = {0xffdce9dc, 0xffe7e2d5, 0xffdce5ea, 0xffeaddd7};
-            TextView avatar = text(initials(name), 18, teal, true); avatar.setGravity(Gravity.CENTER); avatar.setBackground(bg(colors[Math.floorMod(name.hashCode(), colors.length)], 22));
-            item.addView(avatar, new LinearLayout.LayoutParams(dp(52), dp(52)));
-            LinearLayout lines = column(); padding(lines, 14, 0);
-            TextView title = text(name, 17, ink, true); title.setSingleLine(); title.setEllipsize(android.text.TextUtils.TruncateAt.END); lines.addView(title);
-            TextView subtitle = text(preview(chat.optJSONObject("lastMessage")), 13, muted, false); subtitle.setSingleLine(); subtitle.setEllipsize(android.text.TextUtils.TruncateAt.END); subtitle.setPadding(0, dp(7), 0, 0); lines.addView(subtitle); item.addView(lines, weight());
-            LinearLayout trailing = column(); trailing.setGravity(Gravity.END); trailing.addView(text(time(chat.optLong("timestamp"), false), 11, muted, false));
-            int unread = chat.optInt("unread");
-            if (unread > 0) { TextView badge = text(unread > 99 ? "99+" : "" + unread, 11, Color.WHITE, true); badge.setGravity(Gravity.CENTER); padding(badge, 7, 3); badge.setBackground(bg(teal, 20)); LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(-2, -2); bp.topMargin = dp(8); trailing.addView(badge, bp); }
-            item.addView(trailing); item.setOnClickListener(v -> openChat(chat.optString("id"), name)); content.addView(item);
-            View divider = new View(this); divider.setBackgroundColor(0xffe9eee7); LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(1)); lp.leftMargin = dp(90); lp.rightMargin = dp(24); content.addView(divider, lp);
+    private String nameFor(String id) { for(int i=0;i<chats.length();i++) { JSONObject c=chats.optJSONObject(i); if(c.optString("id").equals(id)) return c.optString("name"); } return id.split("@")[0]; }
+    private final ArrayList<JSONObject> visible = new ArrayList<>();
+    private void renderInbox() {
+        if(!screen.equals("inbox") || adapter==null) return;
+        String snapshot=tab+"|"+query+"|"+(tab.equals("Calls")?calls.toString():chats.toString());
+        if(snapshot.equals(inboxSnapshot))return;inboxSnapshot=snapshot;
+        visible.clear(); String q=query.toLowerCase(Locale.ROOT);
+        JSONArray source=tab.equals("Calls")?calls:chats;
+        for(int i=0;i<source.length();i++) {
+            JSONObject item=source.optJSONObject(i); if(item==null)continue;
+            boolean isCall=tab.equals("Calls");
+            if(!isCall && item.optBoolean("isGroup")!=tab.equals("Groups"))continue;
+            String name=isCall?nameFor(item.optString("from")):item.optString("name");
+            if(!(name+" "+(isCall?"":preview(item.optJSONObject("lastMessage")))).toLowerCase(Locale.ROOT).contains(q))continue;
+            visible.add(item);
         }
-        if (count == 0) { TextView empty = text(query.isEmpty() ? "A little quiet here\n\nYour WhatsApp conversations will appear once your server is connected and linked." : "No conversations found", 16, muted, false); empty.setGravity(Gravity.CENTER); padding(empty, 32, 60); content.addView(empty); }
+        adapter.notifyDataSetChanged();
     }
-    private String initials(String name) {
-        String[] parts = name.trim().split("\\s+");
-        if (parts.length == 0 || parts[0].isEmpty()) return "?";
-        String value = parts[0].substring(0, parts[0].offsetByCodePoints(0, 1));
-        if (parts.length > 1) value += parts[parts.length - 1].substring(0, parts[parts.length - 1].offsetByCodePoints(0, 1));
-        return value.toUpperCase(Locale.ROOT);
+    private class ChatAdapter extends BaseAdapter {
+        public int getCount(){return Math.max(1,visible.size());} public Object getItem(int p){return visible.isEmpty()?null:visible.get(p);} public long getItemId(int p){return p;}
+        @Override public View getView(int position, View recycled, android.view.ViewGroup parent) {
+            if(visible.isEmpty()) {
+                TextView empty=text(query.isEmpty()?(tab.equals("Calls")?"No call activity yet\n\nIncoming voice and video calls appear here while your server is running. Answer calls in WhatsApp.":firstSync?"Getting your conversations…":"All quiet for now\n\nYour conversations will appear here."):"No matches found",15,muted,false); pad(empty,32,52); empty.setGravity(Gravity.CENTER); return empty;
+            }
+            JSONObject item=visible.get(position); boolean isCall=tab.equals("Calls"); String id=item.optString(isCall?"from":"id"), name=isCall?nameFor(id):item.optString("name");
+            LinearLayout cell=row(); pad(cell,24,18); cell.setMinimumHeight(dp(90)); cell.addView(avatar(name,id,48),new LinearLayout.LayoutParams(dp(48),dp(48)));
+            LinearLayout lines=col(); pad(lines,15,0); TextView title=text(name,14,ink,true); title.setSingleLine(); title.setEllipsize(TextUtils.TruncateAt.END); lines.addView(title);
+            String subtitle=isCall?(item.optBoolean("isVideo")?"Video call":"Voice call")+" · "+item.optString("status"):preview(item.optJSONObject("lastMessage"));
+            TextView sub=text(subtitle,13,muted,false); sub.setSingleLine(); sub.setEllipsize(TextUtils.TruncateAt.END); sub.setPadding(0,dp(12),0,0); lines.addView(sub); cell.addView(lines,weight());
+            LinearLayout trailing=col(); trailing.setGravity(Gravity.END); trailing.addView(text(time(item.optLong("timestamp"),false),10,item.optInt("unread")>0?green:muted,false));
+            int unread=item.optInt("unread"); if(unread>0) { TextView badge=text(unread>99?"99+":""+unread,10,dark?paper:Color.WHITE,true); badge.setGravity(Gravity.CENTER); pad(badge,6,4); badge.setBackground(bg(green,16)); LinearLayout.LayoutParams bp=new LinearLayout.LayoutParams(-2,-2); bp.topMargin=dp(12); trailing.addView(badge,bp); }
+            cell.addView(trailing); cell.setOnClickListener(v -> { if(isCall) showCall(item); else openChat(id,name); }); return cell;
+        }
     }
-    private void openChat(String id, String name) {
-        chatId = id; chatName = name; shell("chat");
-        LinearLayout header = row(); padding(header, 10, 10); header.addView(action("‹ Back", this::inbox));
-        LinearLayout title = column(); title.addView(text(name, 19, ink, true)); title.addView(text("WhatsApp · via your relay", 12, muted, false)); header.addView(title, weight()); root.addView(header); makeStatus();
-        scroll = new ScrollView(this); scroll.setFillViewport(true); scroll.setBackgroundColor(0xfff0f2eb); content = column(); padding(content, 16, 18); scroll.addView(content); root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
-        LinearLayout compose = row(); padding(compose, 14, 12);
-        composer = new EditText(this); composer.setHint("Write a message…"); composer.setTextSize(16); composer.setMaxLines(5); composer.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE | android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES); composer.setBackground(bg(Color.WHITE, 22)); padding(composer, 16, 10); compose.addView(composer, weight());
-        TextView send = action("Send ↑", this::send); compose.addView(send); root.addView(compose);
-        refresh(); request("POST", "/api/chats/" + encode(chatId) + "/read", new JSONObject(), d -> {});
+    private void newConversation() {
+        EditText phone=field("Phone number with country code"); phone.setInputType(android.text.InputType.TYPE_CLASS_PHONE);
+        new AlertDialog.Builder(this).setTitle("New conversation").setMessage("Enter an international WhatsApp number, including its country code.").setView(phone).setNegativeButton("Cancel",null).setPositiveButton("Open",(d,w)->{
+            String number=phone.getText().toString().replaceAll("[+ ()-]","");
+            if(!number.matches("[0-9]{7,15}")) { Toast.makeText(this,"Enter 7–15 digits with country code",Toast.LENGTH_LONG).show(); return; }
+            openChat(number+"@c.us","+"+number);
+        }).show();
+    }
+    private void openChat(String id,String name) {
+        // Save the previous draft before changing its conversation key.
+        if(screen.equals("chat") && composer!=null) drafts.put(chatId,composer.getText().toString());
+        composer=null; chatId=id; chatName=name; shell("chat");
+        LinearLayout header=row(); pad(header,6,8); header.addView(icon("Back",this::inbox)); header.addView(avatar(name,id,38),new LinearLayout.LayoutParams(dp(38),dp(38)));
+        LinearLayout titles=col(); pad(titles,12,0); TextView title=text(name,15,ink,true); title.setSingleLine(); title.setEllipsize(TextUtils.TruncateAt.END); titles.addView(title); TextView sub=text("WhatsApp · private relay",10,muted,false); sub.setPadding(0,dp(5),0,0); titles.addView(sub); header.addView(titles,weight());
+        header.addView(icon("Voice call",()->callOptions(false))); header.addView(icon("Video call",()->callOptions(true))); root.addView(header); statusView();
+        scroll=new ScrollView(this); scroll.setFillViewport(true); scroll.setBackgroundColor(dark?0xff181f16:0xfff3f5ee); messageList=col(); pad(messageList,14,16); scroll.addView(messageList); root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
+        LinearLayout compose=row(); pad(compose,8,10); compose.addView(icon("Attach",this::pickMedia));
+        composer=field("Message"); composer.setSingleLine(false); composer.setMaxLines(5); composer.setText(drafts.getOrDefault(id,"")); composer.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE|android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES); compose.addView(composer,weight());
+        View send=icon("Send",this::send); compose.addView(send); root.addView(compose); refresh();
+        if(!token.isEmpty())mutate("/api/chats/"+RelayApi.encode(id)+"/read",new JSONObject(),false,d->{});
     }
     private void renderMessages(JSONArray messages) {
-        String value = messages.toString(); if (value.equals(rendered)) return;
-        boolean bottom = rendered.isEmpty() || scroll.getChildAt(0).getHeight() - (scroll.getScrollY() + scroll.getHeight()) < dp(100);
-        rendered = value; content.removeAllViews();
-        if (messages.length() == 0) { TextView empty = text("Say hello\nMessages sent here appear in WhatsApp.", 15, muted, false); padding(empty, 16, 32); content.addView(empty); }
-        for (int i = 0; i < messages.length(); i++) {
-            JSONObject message = messages.optJSONObject(i); if (message == null) continue;
-            boolean mine = message.optBoolean("fromMe");
-            LinearLayout line = row(); line.setGravity(mine ? Gravity.RIGHT : Gravity.LEFT);
-            LinearLayout bubble = column(); padding(bubble, 14, 10); bubble.setBackground(bg(mine ? 0xffdcebdc : Color.WHITE, 18));
-            if (!mine && !message.optString("author").isEmpty()) bubble.addView(text(message.optString("author").split("@")[0], 11, teal, true));
-            String body = message.optString("text");
-            if (message.optBoolean("hasMedia")) body = "[Media · view in WhatsApp]" + (body.isEmpty() ? "" : "\n" + body);
-            if (body.isEmpty()) body = "[" + message.optString("type", "Unsupported message") + "]";
-            TextView messageText = text(body, 16, ink, false); messageText.setMaxWidth(dp(270)); messageText.setTextIsSelectable(true); bubble.addView(messageText);
-            TextView stamp = text(time(message.optLong("timestamp"), true), 10, muted, false); stamp.setGravity(Gravity.END); stamp.setPadding(0, dp(6), 0, 0); bubble.addView(stamp);
-            LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(-2, -2); bp.bottomMargin = dp(10); line.addView(bubble, bp); content.addView(line);
+        if(messages.toString().equals(rendered))return;
+        boolean bottom=rendered.isEmpty() || messageList.getHeight()-(scroll.getScrollY()+scroll.getHeight())<dp(120); rendered=messages.toString(); messageList.removeAllViews();
+        if(messages.length()==0){TextView quiet=text("Say hello\nYour messages sync with WhatsApp.",14,muted,false); quiet.setGravity(Gravity.CENTER); pad(quiet,20,40); messageList.addView(quiet);}
+        String previousDay="";
+        for(int i=0;i<messages.length();i++) {
+            JSONObject m=messages.optJSONObject(i); if(m==null)continue;
+            String day=new SimpleDateFormat("EEE, MMM d",Locale.getDefault()).format(new Date(m.optLong("timestamp")*1000));
+            if(!day.equals(previousDay)){TextView date=text(day,10,muted,true); date.setGravity(Gravity.CENTER); pad(date,0,18); messageList.addView(date); previousDay=day;}
+            boolean mine=m.optBoolean("fromMe"); LinearLayout wrap=row(); wrap.setGravity(mine?Gravity.RIGHT:Gravity.LEFT);
+            LinearLayout bubble=col(); pad(bubble,12,10); bubble.setBackground(bg(mine?outgoing:paper,18));
+            if(!mine && !m.optString("author").isEmpty()){TextView author=text(nameFor(m.optString("author")),10,green,true); author.setMaxWidth(dp(245)); bubble.addView(author);}
+            String mime=m.optString("mimetype"), type=m.optString("type");
+            boolean video=mime.startsWith("video/")||type.equals("video"), image=mime.startsWith("image/")||type.equals("image");
+            if(m.optBoolean("hasMedia")) {
+                String path="/api/chats/"+RelayApi.encode(chatId)+"/media/"+RelayApi.encode(m.optString("id"));
+                if(image){FrameLayout preview=new FrameLayout(this); preview.setBackground(bg(surface,12)); preview.setClipToOutline(true); ImageView picture=new ImageView(this); picture.setScaleType(ImageView.ScaleType.CENTER_CROP); picture.setContentDescription("Photo · tap to view"); preview.addView(picture,new FrameLayout.LayoutParams(-1,-1)); TextView hint=text("Photo · tap to open",10,green,true); hint.setBackground(bg(surface,8)); pad(hint,8,5); FrameLayout.LayoutParams hp=new FrameLayout.LayoutParams(-2,-2,Gravity.BOTTOM|Gravity.START); hp.setMargins(dp(8),0,0,dp(8)); preview.addView(hint,hp); bubble.addView(preview,new LinearLayout.LayoutParams(dp(240),dp(190))); images.load(api,path,picture); preview.setOnClickListener(v->openMedia(path,false));}
+                else if(video){LinearLayout tile=row(); tile.setBackground(bg(surface,12)); tile.addView(icon("Play",()->openMedia(path,true))); LinearLayout labels=col(); labels.addView(text("Video",14,ink,true)); labels.addView(text("Tap to download & play",10,muted,false)); tile.addView(labels); bubble.addView(tile,new LinearLayout.LayoutParams(dp(240),dp(80))); tile.setOnClickListener(v->openMedia(path,true));}
+                else bubble.addView(text("Attachment · view in WhatsApp",12,muted,false));
+            }
+            String body=m.optString("text"); if(!body.isEmpty() || !m.optBoolean("hasMedia")){TextView bodyText=text(body.isEmpty()?"["+type+"]":body,14,ink,false); bodyText.setMaxWidth(dp(245)); bodyText.setTextIsSelectable(true); bodyText.setPadding(0,dp(5),0,0); bubble.addView(bodyText);}
+            int ack=m.optInt("ack"); String receipt=mine?(ack>=2?"  ✓✓":ack>=1?"  ✓":"  ◷"):"";
+            TextView stamp=text(time(m.optLong("timestamp"),true)+receipt,9,ack>=3?green:muted,false); stamp.setGravity(Gravity.END); stamp.setPadding(0,dp(8),0,0); bubble.addView(stamp);
+            LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-2,-2); lp.bottomMargin=dp(8); wrap.addView(bubble,lp); messageList.addView(wrap);
         }
-        if (bottom) scroll.post(() -> scroll.fullScroll(View.FOCUS_DOWN));
+        if(bottom)scroll.post(()->scroll.fullScroll(View.FOCUS_DOWN));
     }
+    private void openMedia(String path,boolean video) { Intent intent=new Intent(this,MediaActivity.class); intent.putExtra("path",path); intent.putExtra("video",video); startActivity(intent); }
     private void send() {
-        String value = composer.getText().toString().trim();
-        if (value.isEmpty() || sending) return;
-        if (value.length() > 4096) { banner("Messages can contain up to 4096 characters."); return; }
-        JSONObject body = new JSONObject(); try { body.put("text", value); } catch (JSONException ignored) {}
-        sending = true; composer.setEnabled(false); banner("Sending…");
-        request("POST", "/api/chats/" + encode(chatId) + "/messages", body, result -> { composer.setText(""); refresh(); });
+        if(sending)return; String value=composer.getText().toString().trim(); if(value.isEmpty())return;
+        if(value.length()>4096){banner("Messages can contain up to 4096 characters.");return;}
+        JSONObject body=new JSONObject(); try{body.put("text",value);}catch(JSONException ignored){}
+        mutate("/api/chats/"+RelayApi.encode(chatId)+"/messages",body,true,result->{composer.setText("");drafts.remove(chatId);rendered="";refresh();});
     }
-    private void settings() {
-        shell("settings"); status = null;
-        ScrollView sc = new ScrollView(this); LinearLayout form = column(); padding(form, 26, 24); sc.addView(form); root.addView(sc);
-        if (!token.isEmpty()) form.addView(action("‹ Conversations", this::inbox));
-        form.addView(text("A private line\nto your messages.", 32, ink, true));
-        TextView intro = text("Connect to the relay running on your computer. Keep Tailscale connected on both devices.", 16, muted, false); padding(intro, 0, 22); form.addView(intro);
-        form.addView(text("SERVER ADDRESS", 11, teal, true));
-        EditText address = new EditText(this); address.setSingleLine(); address.setHint("https://computer.tailnet.ts.net"); address.setText(base); address.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI); form.addView(address);
-        TextView label = text("ACCESS TOKEN", 11, teal, true); padding(label, 0, 18); form.addView(label);
-        EditText secret = new EditText(this); secret.setSingleLine(); secret.setHint(token.isEmpty() ? "Paste your server token" : "Leave blank to keep saved token"); secret.setInputType(129); secret.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO); form.addView(secret);
-        TextView error = text("", 13, 0xff9b3b2e, false); padding(error, 0, 12); form.addView(error);
-        TextView save = action("Connect to relay  →", () -> {
+    private void pickMedia() {
+        if(sending)return; pickerChat=chatId;
+        Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT); intent.addCategory(Intent.CATEGORY_OPENABLE); intent.setType("*/*"); intent.putExtra(Intent.EXTRA_MIME_TYPES,new String[]{"image/jpeg","image/png","image/webp","image/gif","video/mp4","video/webm"}); startActivityForResult(intent,10);
+    }
+    @Override protected void onActivityResult(int requestCode,int resultCode,Intent data) {
+        super.onActivityResult(requestCode,resultCode,data);
+        if(requestCode!=10 || resultCode!=RESULT_OK || data==null || data.getData()==null || !screen.equals("chat") || !chatId.equals(pickerChat))return;
+        Uri uri=data.getData(); int version=generation; banner("Preparing attachment…");
+        worker.execute(()->{
             try {
-                URI uri = URI.create(address.getText().toString().trim());
-                if (!"https".equals(uri.getScheme()) || uri.getHost() == null || !uri.getHost().endsWith(".ts.net") || uri.getUserInfo() != null || uri.getQuery() != null || uri.getFragment() != null || (uri.getPort() != -1 && uri.getPort() != 443) || !(uri.getPath().isEmpty() || uri.getPath().equals("/"))) throw new Exception("Use the HTTPS .ts.net address printed by Tailscale Serve, with no path.");
-                String nextToken = secret.getText().toString().trim(); if (nextToken.isEmpty()) nextToken = token;
-                if (nextToken.length() < 32) throw new Exception("Paste the server access token (at least 32 characters).");
-                SecretStore.save(this, nextToken); token = nextToken; base = "https://" + uri.getHost();
-                getSharedPreferences("relay", 0).edit().putString("url", base).apply(); chats = new JSONArray(); inbox();
-            } catch (Exception e) { error.setText(e.getMessage() == null ? "Could not save connection." : e.getMessage()); }
+                String mime=getContentResolver().getType(uri); String filename="attachment";
+                try(Cursor cursor=getContentResolver().query(uri,new String[]{OpenableColumns.DISPLAY_NAME,OpenableColumns.SIZE},null,null,null)) {
+                    if(cursor!=null && cursor.moveToFirst()){filename=cursor.getString(0);if(!cursor.isNull(1)&&cursor.getLong(1)>RelayApi.MAX_MEDIA)throw new IOException("Choose a file smaller than 16 MiB.");}
+                }
+                byte[] bytes; try(InputStream input=getContentResolver().openInputStream(uri)){bytes=RelayApi.read(input,RelayApi.MAX_MEDIA);}
+                String type=mime==null?"application/octet-stream":mime; String name=filename;
+                runOnUiThread(()->{if(version==generation && !isDestroyed())confirmAttachment(bytes,type,name);});
+            } catch(Exception e){runOnUiThread(()->{if(version==generation)banner(e.getMessage()==null?"Could not open attachment":e.getMessage());});}
         });
-        save.setTextColor(Color.WHITE); save.setBackground(bg(teal, 16)); form.addView(save, new LinearLayout.LayoutParams(-1, dp(54)));
-        TextView note = text("PRIVATE BY DESIGN\n\nYour computer links to WhatsApp. Tailscale carries the connection to this phone. The access token stays encrypted on this device.\n\nScan the WhatsApp QR code in your server terminal before opening conversations.", 13, muted, false); padding(note, 0, 30); form.addView(note);
     }
-    private static String encode(String value) {
-        try { return java.net.URLEncoder.encode(value, "UTF-8"); } catch (java.io.UnsupportedEncodingException e) { throw new AssertionError(e); }
+    private void confirmAttachment(byte[] data,String mime,String filename) {
+        boolean supported=Arrays.asList("image/jpeg","image/png","image/webp","image/gif","video/mp4","video/webm").contains(mime);
+        if(!supported){banner("Choose a JPEG, PNG, WebP, GIF, MP4 or WebM file.");return;}
+        LinearLayout preview=col(); pad(preview,24,8);
+        if(mime.startsWith("image/")){ImageView image=new ImageView(this); image.setImageBitmap(ImageLoader.decode(data,600)); image.setScaleType(ImageView.ScaleType.FIT_CENTER); preview.addView(image,new LinearLayout.LayoutParams(-1,dp(200)));}
+        preview.addView(text(filename+" · "+String.format(Locale.getDefault(),"%.1f MiB",data.length/1048576f),12,muted,false));
+        EditText caption=field("Add a caption (optional)"); caption.setText(composer.getText()); preview.addView(caption);
+        int version=generation;
+        new AlertDialog.Builder(this).setTitle(mime.startsWith("video/")?"Send video":"Send photo").setView(preview).setNegativeButton("Cancel",null).setPositiveButton("Send",(d,w)->{
+            if(version!=generation)return;
+            if(caption.length()>4096){banner("Caption is too long (maximum 4096 characters).");return;}
+            String captionValue=caption.getText().toString(), target=chatId;
+            sending=true;composer.setEnabled(false);banner("Preparing upload…");
+            worker.execute(()->{
+                try {
+                    JSONObject body=new JSONObject();body.put("mimetype",mime);body.put("filename",filename);body.put("caption",captionValue);body.put("data",android.util.Base64.encodeToString(data,android.util.Base64.NO_WRAP));
+                    runOnUiThread(()->{if(version!=generation||isDestroyed())return;sending=false;mutate("/api/chats/"+RelayApi.encode(target)+"/media",body,true,result->{composer.setText("");drafts.remove(target);rendered="";refresh();});});
+                } catch(Exception e){runOnUiThread(()->{if(version==generation){sending=false;composer.setEnabled(true);banner("Could not prepare attachment. Please choose it again.");}});}
+            });
+        }).show();
+    }
+    private void callOptions(boolean video) {
+        new AlertDialog.Builder(this).setTitle(video?"Video call":"Voice call").setMessage("Calls take place in the official WhatsApp app. Open the conversation there, then tap its "+(video?"video":"voice")+" call button. You can also create a call link to share.").setNegativeButton("Cancel",null).setPositiveButton("Open WhatsApp",(d,w)->openWhatsApp(chatId)).setNeutralButton("Create link",(d,w)->createCallLink(video)).show();
+    }
+    private void openWhatsApp(String id) {
+        String number=id.endsWith("@c.us")?id.split("@")[0]:"";
+        for(String packageName:new String[]{"com.whatsapp","com.whatsapp.w4b"}) {
+            Intent intent=number.matches("[0-9]+")?new Intent(Intent.ACTION_VIEW,Uri.parse("https://wa.me/"+number)).setPackage(packageName):getPackageManager().getLaunchIntentForPackage(packageName);
+            if(intent==null)continue;
+            try{startActivity(intent);return;}catch(ActivityNotFoundException ignored){}
+        }
+        new AlertDialog.Builder(this).setTitle("WhatsApp is needed for calls").setMessage("Install WhatsApp on this phone. Relay supports call activity and declining incoming calls; call audio and video run in WhatsApp.").setPositiveButton("OK",null).show();
+    }
+    private void openExternal(Intent intent) { try { startActivity(intent); } catch (ActivityNotFoundException e) { Toast.makeText(this,"No compatible app is installed to open this link.",Toast.LENGTH_LONG).show(); } }
+    private void createCallLink(boolean video) {
+        JSONObject body=new JSONObject();try{body.put("type",video?"video":"voice");}catch(JSONException ignored){}
+        mutate("/api/call-links",body,false,result->{String url=result.optString("url");new AlertDialog.Builder(this).setTitle("Call link ready").setMessage(url).setNegativeButton("Close",null).setPositiveButton("Open in WhatsApp",(d,w)->openExternal(new Intent(Intent.ACTION_VIEW,Uri.parse(url)))).setNeutralButton("Share",(d,w)->{Intent share=new Intent(Intent.ACTION_SEND);share.setType("text/plain");share.putExtra(Intent.EXTRA_TEXT,url);openExternal(Intent.createChooser(share,"Share call link"));}).show();});
+    }
+    private void showCall(JSONObject call) {
+        AlertDialog.Builder dialog=new AlertDialog.Builder(this).setTitle((call.optBoolean("isVideo")?"Video":"Voice")+" call · "+nameFor(call.optString("from"))).setMessage("Answer or call back using the official WhatsApp app. Call activity reflects events received by this server; it is not a live call connection.").setNegativeButton("Close",null).setPositiveButton("Open WhatsApp",(d,w)->openWhatsApp(call.optString("from")));
+        if(call.optBoolean("canReject"))dialog.setNeutralButton("Decline",(d,w)->mutate("/api/calls/"+RelayApi.encode(call.optString("id"))+"/reject",new JSONObject(),false,result->refresh()));
+        incomingDialog=dialog.show();
+    }
+    private EditText field(String hint) { EditText v=new EditText(this);v.setTextSize(14);v.setTypeface(regular);v.setTextColor(ink);v.setHintTextColor(muted);v.setHint(hint);v.setBackground(bg(surface,18));pad(v,16,14);return v; }
+    private void settings() {
+        shell("settings"); ScrollView sc=new ScrollView(this);LinearLayout form=col();pad(form,24,20);sc.addView(form);root.addView(sc);
+        if(!token.isEmpty())form.addView(action("‹  Back to chats",this::inbox));form.addView(wordmark());
+        TextView heading=text("Make yourself at home.",22,ink,true);pad(heading,0,24);form.addView(heading);
+        form.addView(text("APPEARANCE",10,muted,true));LinearLayout themes=row();String saved=getSharedPreferences("relay",0).getString("theme","system");
+        for(String mode:new String[]{"light","dark","system"}){TextView choice=action(mode.substring(0,1).toUpperCase(Locale.ROOT)+mode.substring(1),()->{getSharedPreferences("relay",0).edit().putString("theme",mode).apply();configureTheme();settings();});choice.setBackground(bg(mode.equals(saved)?outgoing:surface,16));themes.addView(choice,new LinearLayout.LayoutParams(0,-2,1));}LinearLayout.LayoutParams tp=new LinearLayout.LayoutParams(-1,-2);tp.topMargin=dp(12);tp.bottomMargin=dp(30);form.addView(themes,tp);
+        form.addView(text("YOUR RELAY",10,muted,true));TextView description=text("Keep Tailscale connected on this phone and your computer.",13,muted,false);pad(description,0,14);form.addView(description);
+        EditText address=field("https://computer.tailnet.ts.net");address.setText(base);address.setSingleLine();address.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_URI);form.addView(address);
+        EditText secret=field(token.isEmpty()?"Access token":"Access token · blank keeps saved token");secret.setSingleLine();secret.setInputType(129);secret.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);LinearLayout.LayoutParams secretLp=new LinearLayout.LayoutParams(-1,-2);secretLp.topMargin=dp(12);form.addView(secret,secretLp);
+        TextView error=text("",12,errorColor,false);pad(error,0,12);form.addView(error);
+        TextView save=action("Connect to relay  →",()->{try {
+            URI uri=URI.create(address.getText().toString().trim());
+            if(!"https".equals(uri.getScheme())||uri.getHost()==null||!uri.getHost().endsWith(".ts.net")||uri.getUserInfo()!=null||uri.getQuery()!=null||uri.getFragment()!=null||(uri.getPort()!=-1&&uri.getPort()!=443)||!(uri.getPath().isEmpty()||uri.getPath().equals("/")))throw new Exception("Use the HTTPS .ts.net address printed by Tailscale Serve, with no path.");
+            String nextBase="https://"+uri.getHost(),nextToken=secret.getText().toString().trim();
+            if(nextToken.isEmpty()&&!base.isEmpty()&&!base.equals(nextBase))throw new Exception("Enter the access token when changing servers.");
+            if(nextToken.isEmpty())nextToken=token;if(nextToken.length()<32)throw new Exception("Paste your server token (at least 32 characters).");
+            SecretStore.save(this,nextToken);token=nextToken;base=nextBase;api=new RelayApi(base,token);getSharedPreferences("relay",0).edit().putString("url",base).apply();images.close();images=new ImageLoader();chats=new JSONArray();calls=new JSONArray();drafts.clear();seenCalls.clear();accountId="";accountName="You";firstSync=true;inbox();
+        }catch(Exception e){error.setText(e.getMessage()==null?"Could not save connection":e.getMessage());}});save.setBackground(bg(green,18));save.setTextColor(dark?paper:Color.WHITE);form.addView(save,new LinearLayout.LayoutParams(-1,dp(52)));
+        TextView note=text("PRIVATE BY DESIGN\n\nPhotos and videos travel through your authenticated relay. Profile photos follow WhatsApp privacy settings.\n\nCalls open in the official WhatsApp app. Incoming call alerts work while Chat Relay is open; background ringing and answering are not supported.\n\nInter font · SIL Open Font License",12,muted,false);pad(note,0,28);form.addView(note);
     }
     private void refresh() {
-        if (screen.equals("settings") || fetching || token.isEmpty()) return;
-        fetching = true;
-        request("GET", "/api/status", null, result -> {
-            if (!result.optBoolean("ready")) { banner("WhatsApp: " + result.optString("state") + " · Check your server terminal"); return; }
-            banner("◈  Private connection · WhatsApp ready");
-            if (screen.equals("inbox")) request("GET", "/api/chats", null, data -> { chats = data.optJSONArray("chats"); if (chats == null) chats = new JSONArray(); renderChats(); });
-            else if (screen.equals("chat")) request("GET", "/api/chats/" + encode(chatId) + "/messages", null, data -> { JSONArray messages = data.optJSONArray("messages"); if (messages != null) renderMessages(messages); });
+        if(screen.equals("settings")||fetching||token.isEmpty())return;
+        fetching=true;int version=generation;String page=screen,id=chatId;RelayApi client=api;
+        worker.execute(()->{
+            try {
+                JSONObject state=client.json("GET","/api/status",null);
+                if(!state.optBoolean("ready")){runOnUiThread(()->{if(version==generation){fetching=false;banner("WhatsApp: "+state.optString("state")+" · Check your server terminal");}});return;}
+                JSONObject data=client.json("GET",page.equals("chat")?"/api/chats/"+RelayApi.encode(id)+"/messages":"/api/chats",null);
+                JSONArray callData=null;try{callData=client.json("GET","/api/calls",null).optJSONArray("calls");}catch(Exception ignored){}
+                JSONArray events=callData;
+                runOnUiThread(()->{
+                    if(version!=generation||isDestroyed())return;fetching=false;firstSync=false;if(!sending&&!stickyError&&status!=null)status.setVisibility(View.GONE);
+                    JSONObject account=state.optJSONObject("account");if(account!=null){accountId=account.optString("id");accountName=account.optString("name","You");}
+                    if(events!=null)calls=events;
+                    if(page.equals("inbox")){chats=data.optJSONArray("chats");if(chats==null)chats=new JSONArray();renderTabs();renderInbox();if(myAvatar!=null&&!accountId.isEmpty()){myAvatar.removeAllViews();myAvatar.addView(avatar(accountName,accountId,40),new FrameLayout.LayoutParams(-1,-1));}}
+                    else {JSONArray messages=data.optJSONArray("messages");if(messages!=null)renderMessages(messages);}
+                    for(int i=calls.length()-1;i>=0;i--){JSONObject call=calls.optJSONObject(i);String callId=call.optString("id");if(seenCalls.add(callId)&&call.optBoolean("canReject")&&active&&(incomingDialog==null||!incomingDialog.isShowing()))showCall(call);}
+                });
+            }catch(Exception e){runOnUiThread(()->{if(version==generation){fetching=false;banner(e.getMessage()==null?"Connection failed. Check Tailscale and your server.":e.getMessage());}});}
         });
     }
-    private void request(String method, String path, JSONObject body, Result callback) {
-        final int version = generation; final String endpoint = base + path, access = token;
-        worker.execute(() -> {
-            JSONObject data = null; String failure = null; HttpURLConnection connection = null;
-            try {
-                connection = (HttpURLConnection) new URL(endpoint).openConnection();
-                connection.setInstanceFollowRedirects(false); connection.setRequestMethod(method); connection.setConnectTimeout(10000); connection.setReadTimeout(25000);
-                connection.setRequestProperty("Authorization", "Bearer " + access);
-                if (body != null) { connection.setDoOutput(true); connection.setRequestProperty("Content-Type", "application/json"); try (OutputStream out = connection.getOutputStream()) { out.write(body.toString().getBytes(StandardCharsets.UTF_8)); } }
-                int code = connection.getResponseCode();
-                InputStream stream = code >= 200 && code < 300 ? connection.getInputStream() : connection.getErrorStream();
-                if (stream == null) throw new IOException("No response");
-                StringBuilder response = new StringBuilder();
-                try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) { String line; while ((line = reader.readLine()) != null) { response.append(line); if (response.length() > 8000000) throw new IOException("Response too large"); } }
-                data = new JSONObject(response.toString());
-                if (code < 200 || code >= 300) throw new IOException(data.optString("error", "Server error " + code));
-            } catch (Exception e) { failure = e instanceof IOException && e.getMessage() != null ? e.getMessage() : "Connection failed. Check Tailscale, server address and access token."; }
-            finally { if (connection != null) connection.disconnect(); }
-            final JSONObject result = data; final String error = failure;
-            handler.post(() -> {
-                fetching = false;
-                if (version != generation || isDestroyed()) return;
-                if (method.equals("POST") && path.endsWith("/messages")) { sending = false; if (composer != null) composer.setEnabled(true); }
-                if (error != null) banner((method.equals("POST") && path.endsWith("/messages") ? "Send unconfirmed. Check conversation before retrying. " : "") + error);
-                else callback.done(result);
+    private void mutate(String path,JSONObject body,boolean message,Result callback) {
+        if(message&&sending)return;
+        int version=generation;RelayApi client=api;if(message){sending=true;if(composer!=null)composer.setEnabled(false);banner("Sending…");}
+        worker.execute(()->{
+            JSONObject result=null;String error=null;
+            try{result=client.json("POST",path,body);}catch(Exception e){error=e.getMessage()==null?"Request failed":e.getMessage();}
+            JSONObject response=result;String failure=error;
+            runOnUiThread(()->{
+                if(version!=generation||isDestroyed())return;
+                if(message){sending=false;if(composer!=null)composer.setEnabled(true);}
+                if(failure!=null){stickyError=true;banner((message?"Send unconfirmed. Check the conversation before retrying. ":"")+failure);}
+                else {stickyError=false;if(status!=null)status.setVisibility(View.GONE);callback.done(response);}
             });
         });
     }
