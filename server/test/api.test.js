@@ -131,3 +131,11 @@ test('streams binary uploads and preserves international filenames/captions', as
   });
   assert.equal(response.status,201);assert.equal(sent.caption,'Café ☕ नमस्ते + photo');assert.equal(sent.size,png.length);assert.equal(sent.data,png.toString('base64'));
 });
+test('decodes call identifiers and rejects malformed path encodings safely', async t => {
+  const ids=[];
+  const {request}=await fixture(t,{rejectCall:async id=>ids.push(id)});
+  assert.equal((await request('/api/calls/'+encodeURIComponent('call:1@device')+'/reject',{method:'POST'})).status,200);
+  assert.deepEqual(ids,['call:1@device']);
+  assert.equal((await request('/api/chats/%invalid/messages')).status,400);
+  assert.equal((await request('/api/calls/%invalid/reject',{method:'POST'})).status,400);
+});

@@ -3,6 +3,9 @@ import { timingSafeEqual } from 'node:crypto';
 import { MAX_MEDIA_BYTES, validateMedia, problem as fail } from './media.js';
 const chatIdPattern = /^[0-9A-Za-z_.:-]+@(c\.us|g\.us|lid)$/;
 const messageIdPattern = /^[0-9A-Za-z_@.:-]{1,300}$/;
+function segment(value) {
+  try { return decodeURIComponent(value); } catch { throw fail(400, 'Invalid URL encoding.'); }
+}
 async function readBytes(req, limit) {
   const chunks = []; let bytes = 0;
   for await (const chunk of req) {
@@ -40,11 +43,15 @@ export function createApi({ token, relay }) {
         if (!['voice', 'video'].includes(body?.type)) throw fail(400, 'Call type must be voice or video.');
         return reply(201, { url: await relay.callLink(body.type) });
       }
-      const callMatch = /^\/api\/calls\/([A-Za-z0-9_.:-]{1,200})\/reject$/.exec(url.pathname);
-      if (req.method === 'POST' && callMatch) { await relay.rejectCall(callMatch[1]); return reply(200, { ok: true }); }
+      const callMatch = /^\/api\/calls\/([^/]+)\/reject$/.exec(url.pathname);
+      if (req.method === 'POST' && callMatch) {
+        const callId = segment(callMatch[1]);
+        if (!/^[A-Za-z0-9_@.:-]{1,200}$/.test(callId)) throw fail(400, 'Invalid call ID');
+        await relay.rejectCall(callId); return reply(200, { ok: true });
+      }
       const match = /^\/api\/chats\/([^/]+)\/(messages|read|avatar|media)(?:\/([^/]+))?$/.exec(url.pathname);
       if (!match) throw fail(404, 'Not found');
-      const id = decodeURIComponent(match[1]);
+      const id = segment(match[1]);
       if (!chatIdPattern.test(id)) throw fail(400, 'Invalid chat ID');
       if (match[3] && (match[2] !== 'media' || req.method !== 'GET')) throw fail(404, 'Not found');
       if (req.method === 'GET' && match[2] === 'messages') return reply(200, { messages: await relay.messages(id) });
@@ -54,7 +61,7 @@ export function createApi({ token, relay }) {
         return binary(photo);
       }
       if (req.method === 'GET' && match[2] === 'media' && match[3]) {
-        const messageId = decodeURIComponent(match[3]);
+        const messageId = segment(match[3]);
         if (!messageIdPattern.test(messageId)) throw fail(400, 'Invalid message ID');
         return binary(await relay.media(id, messageId));
       }
