@@ -56,4 +56,11 @@ public class AppearanceTest {
             scenario.onActivity(a->{try{call(a,"inbox");Method open=MainActivity.class.getDeclaredMethod("openChat",String.class,String.class);open.setAccessible(true);open.invoke(a,"10000@c.us","Ananya Sharma");assertEquals("Remember this draft",((EditText)field("composer").get(a)).getText().toString());}catch(Exception e){throw new RuntimeException(e);}});
         }
     }
+    @Test public void imageDecodingBoundsMemoryAndRejectsInvalidData() {
+        Bitmap original=Bitmap.createBitmap(2400,1600,Bitmap.Config.ARGB_8888);original.eraseColor(0xff80976d);
+        ByteArrayOutputStream out=new ByteArrayOutputStream();original.compress(Bitmap.CompressFormat.PNG,100,out);original.recycle();
+        Bitmap thumbnail=ImageLoader.decode(out.toByteArray(),600);assertNotNull(thumbnail);assertTrue(thumbnail.getWidth()<=600);assertTrue(thumbnail.getHeight()<=600);thumbnail.recycle();
+        assertNull(ImageLoader.decode(new byte[]{1,2,3,4},600));
+    }
+
 }

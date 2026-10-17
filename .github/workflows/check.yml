@@ -60,7 +60,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          ./gradlew :app:assembleDebug :app:lintDebug --stacktrace > build.log 2>&1
+          ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug --stacktrace > build.log 2>&1
           relay_build_status=$?
           cat build.log
           if [ "$relay_build_status" -ne 0 ]; then
