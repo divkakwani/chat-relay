@@ -50,6 +50,11 @@ jobs:
           echo "ANDROID_SDK_ROOT=$relay_sdk" >> "$GITHUB_ENV"
           yes | "$relay_sdkmanager" --licenses > /dev/null || true
           "$relay_sdkmanager" "platforms;android-35" "build-tools;35.0.0"
+      - name: Keep the development APK signing identity between builds
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: chat-relay-debug-keystore-v1
       - name: Build and lint Android
         working-directory: android
         shell: bash
@@ -119,6 +124,21 @@ jobs:
           script: |
             ./gradlew :app:connectedDebugAndroidTest --stacktrace
             adb pull /sdcard/Android/data/dev.chatrelay/files/ ../ui-screenshots
+      - name: Report emulator test failures
+        if: failure()
+        run: |
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          for path in Path('android/app/build/outputs/androidTest-results').rglob('*.xml'):
+              try:
+                  root = ET.parse(path).getroot()
+                  for failure in root.iter('failure'):
+                      message = (failure.text or failure.get('message', 'Android UI test failed'))[:10000]
+                      print('::error::' + message.replace('%', '%25').replace('\n', '%0A').replace('\r', '%0D'))
+              except ET.ParseError:
+                  pass
+          PYTHON
       - uses: actions/upload-artifact@v4
         if: always()
         with:

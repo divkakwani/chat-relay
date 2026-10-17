@@ -37,6 +37,21 @@ final class RelayApi {
             }
         } finally { c.disconnect(); }
     }
+    JSONObject upload(String path, byte[] bytes, String mimetype, String filename, String caption) throws Exception {
+        HttpURLConnection c = open(path, "POST");
+        try {
+            c.setDoOutput(true); c.setRequestProperty("Content-Type", mimetype);
+            c.setRequestProperty("X-Relay-Caption", encode(caption)); c.setRequestProperty("X-Relay-Filename", encode(filename));
+            c.setFixedLengthStreamingMode(bytes.length);
+            try (OutputStream out = c.getOutputStream()) { out.write(bytes); }
+            int status = c.getResponseCode();
+            try (InputStream stream = status < 300 ? c.getInputStream() : c.getErrorStream()) {
+                JSONObject result = new JSONObject(new String(read(stream, 20000), StandardCharsets.UTF_8));
+                if (status < 200 || status >= 300) throw new IOException(result.optString("error", "Upload failed"));
+                return result;
+            }
+        } finally { c.disconnect(); }
+    }
     byte[] bytes(String path) throws Exception {
         HttpURLConnection c = open(path, "GET");
         try {

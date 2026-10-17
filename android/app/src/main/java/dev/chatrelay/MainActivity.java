@@ -52,7 +52,7 @@ public class MainActivity extends Activity {
             regular = new Typeface.Builder(getAssets(), "fonts/Inter.ttf").setFontVariationSettings("'wght' 400, 'opsz' 14").build();
             medium = new Typeface.Builder(getAssets(), "fonts/Inter.ttf").setFontVariationSettings("'wght' 550, 'opsz' 14").build();
             bold = new Typeface.Builder(getAssets(), "fonts/Inter.ttf").setFontVariationSettings("'wght' 700, 'opsz' 24").build();
-        } catch (Exception e) { regular = Typeface.create("sans-serif",0); medium = Typeface.create("sans-serif-medium",0); bold = Typeface.create("sans-serif",1); }
+        } catch (Exception e) { regular = Typeface.create("sans-serif",Typeface.NORMAL); medium = Typeface.create("sans-serif-medium",Typeface.NORMAL); bold = Typeface.create("sans-serif",Typeface.BOLD); }
         base = getSharedPreferences("relay",0).getString("url","");
         try { token = SecretStore.load(this); } catch (Exception ignored) {}
         api = new RelayApi(base,token);
@@ -287,13 +287,20 @@ public class MainActivity extends Activity {
         new AlertDialog.Builder(this).setTitle(mime.startsWith("video/")?"Send video":"Send photo").setView(preview).setNegativeButton("Cancel",null).setPositiveButton("Send",(d,w)->{
             if(version!=generation)return;
             if(caption.length()>4096){banner("Caption is too long (maximum 4096 characters).");return;}
-            String captionValue=caption.getText().toString(), target=chatId;
-            sending=true;composer.setEnabled(false);banner("Preparing upload…");
+            String captionValue=caption.getText().toString(), target=chatId;RelayApi client=api;
+            sending=true;composer.setEnabled(false);banner("Sending attachment…");
+            // Stream the binary body directly; avoid several base64/JSON copies
+            // of a potentially 16 MiB video on a phone's limited heap.
             worker.execute(()->{
-                try {
-                    JSONObject body=new JSONObject();body.put("mimetype",mime);body.put("filename",filename);body.put("caption",captionValue);body.put("data",android.util.Base64.encodeToString(data,android.util.Base64.NO_WRAP));
-                    runOnUiThread(()->{if(version!=generation||isDestroyed())return;sending=false;mutate("/api/chats/"+RelayApi.encode(target)+"/media",body,true,result->{composer.setText("");drafts.remove(target);rendered="";refresh();});});
-                } catch(Exception e){runOnUiThread(()->{if(version==generation){sending=false;composer.setEnabled(true);banner("Could not prepare attachment. Please choose it again.");}});}
+                String failure=null;
+                try { client.upload("/api/chats/"+RelayApi.encode(target)+"/media",data,mime,filename,captionValue); }
+                catch(Exception e){failure=e.getMessage()==null?"Attachment upload failed":e.getMessage();}
+                String error=failure;
+                runOnUiThread(()->{
+                    if(version!=generation||isDestroyed())return;sending=false;composer.setEnabled(true);
+                    if(error!=null){stickyError=true;banner("Send unconfirmed. Check the conversation before retrying. "+error);}
+                    else{stickyError=false;composer.setText("");drafts.remove(target);rendered="";if(status!=null)status.setVisibility(View.GONE);refresh();}
+                });
             });
         }).show();
     }

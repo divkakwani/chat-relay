@@ -107,7 +107,7 @@ Every push runs the build. To create a fresh APK without changing code, select *
 
 ## Updating from version 1.0
 
-Install the latest `chat-relay-debug-apk` build and **restart the server with the updated code**. Your saved server address, access token and WhatsApp link remain usable. The new Android app needs the new server endpoints for media, profile photos and calls.
+Install the latest `chat-relay-debug-apk` build and **restart the server with the updated code**. An in-place app update retains your server address and token. If Android refuses the update because the development signing certificate changed, uninstall the old debug app first and re-enter the address/token after installing. Uninstalling clears Android settings, but does not unlink the WhatsApp session on your computer. CI caches its debug signing key for subsequent builds; cache expiry can still change that development identity. The new Android app needs the new server endpoints for media, profile photos and calls.
 
 ```sh
 # From the repository root
@@ -197,7 +197,7 @@ All requests require `Authorization: Bearer <RELAY_TOKEN>`; errors are JSON `{ "
 | GET | `/api/chats` | `{ chats: [...] }`, newest first |
 | GET | `/api/chats/:id/avatar` | Authenticated profile-photo bytes, or 404 when unavailable/private |
 | GET | `/api/chats/:id/media/:messageId` | Authenticated attachment bytes, up to 16 MiB |
-| POST | `/api/chats/:id/media` | JSON `{ "mimetype": "image/jpeg", "data": "base64…", "filename": "photo.jpg", "caption": "Optional" }` |
+| POST | `/api/chats/:id/media` | Raw media bytes with the media `Content-Type` and URL-encoded `X-Relay-Filename` / `X-Relay-Caption` headers (used by Android); base64 JSON is also accepted |
 | GET | `/api/calls` | Incoming/outgoing call events received during the current server session |
 | POST | `/api/calls/:id/reject` | Explicitly decline a recent incoming call |
 | POST | `/api/call-links` | Body `{ "type": "voice" }` or `{ "type": "video" }`; returns `{ "url": "https://call.whatsapp.com/…" }` |

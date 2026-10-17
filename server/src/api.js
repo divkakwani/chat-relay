@@ -3,18 +3,22 @@ import { timingSafeEqual } from 'node:crypto';
 import { MAX_MEDIA_BYTES, validateMedia, problem as fail } from './media.js';
 const chatIdPattern = /^[0-9A-Za-z_.:-]+@(c\.us|g\.us|lid)$/;
 const messageIdPattern = /^[0-9A-Za-z_@.:-]{1,300}$/;
-async function readJson(req, limit = 20000) {
+async function readBytes(req, limit) {
   const chunks = []; let bytes = 0;
   for await (const chunk of req) {
     bytes += chunk.length;
     if (bytes > limit) throw fail(413, 'Request too large.');
     chunks.push(chunk);
   }
-  try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw fail(400, 'Invalid JSON'); }
+  return Buffer.concat(chunks);
+}
+async function readJson(req, limit = 20000) {
+  const data = await readBytes(req, limit);
+  try { return JSON.parse(data.toString('utf8')); } catch { throw fail(400, 'Invalid JSON'); }
 }
 export function createApi({ token, relay }) {
   if (!token || token.length < 32 || token.startsWith('replace-')) throw new Error('Set RELAY_TOKEN to a random secret of at least 32 characters.');
-  return http.createServer(async (req, res) => {
+  return http.createServer({ maxHeaderSize: 65536 }, async (req, res) => {
     const reply = (status, value) => {
       res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
       res.end(JSON.stringify(value));
@@ -56,7 +60,18 @@ export function createApi({ token, relay }) {
       }
       if (req.method === 'POST' && match[2] === 'read') { await relay.read(id); return reply(200, { ok: true }); }
       if (req.method === 'POST' && match[2] === 'media') {
-        const body = validateMedia(await readJson(req, Math.ceil(MAX_MEDIA_BYTES * 4 / 3) + 12000));
+        let payload;
+        const mimetype = req.headers['content-type']?.split(';')[0];
+        if (mimetype === 'application/json') payload = await readJson(req, Math.ceil(MAX_MEDIA_BYTES * 4 / 3) + 12000);
+        else {
+          let caption, filename;
+          try {
+            caption = decodeURIComponent((req.headers['x-relay-caption'] || '').replace(/\+/g, ' '));
+            filename = decodeURIComponent((req.headers['x-relay-filename'] || 'attachment').replace(/\+/g, ' '));
+          } catch { throw fail(400, 'Invalid attachment metadata.'); }
+          payload = { mimetype, caption, filename, data: (await readBytes(req, MAX_MEDIA_BYTES)).toString('base64') };
+        }
+        const body = validateMedia(payload);
         return reply(201, { message: await relay.sendMedia(id, body) });
       }
       if (req.method !== 'POST' || match[2] !== 'messages') throw fail(405, 'Method not allowed');

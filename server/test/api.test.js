@@ -122,3 +122,12 @@ test('exposes call capabilities and events, validates call links, and declines o
   assert.equal((await link.json()).url,'https://call.whatsapp.com/video/test');
   assert.equal((await request('/api/calls/call1/reject',{method:'POST'})).status,200); assert.deepEqual(declined,['call1']);
 });
+test('streams binary uploads and preserves international filenames/captions', async t => {
+  let sent;
+  const { request } = await fixture(t, { sendMedia: async (id, media) => { sent=media;return {id:'sent'}; } });
+  const response = await request('/api/chats/123%40c.us/media', {
+    method:'POST', body:png,
+    headers:{'Content-Type':'image/png','X-Relay-Caption':encodeURIComponent('Café ☕ नमस्ते + photo'),'X-Relay-Filename':encodeURIComponent('नमस्ते.png')}
+  });
+  assert.equal(response.status,201);assert.equal(sent.caption,'Café ☕ नमस्ते + photo');assert.equal(sent.size,png.length);assert.equal(sent.data,png.toString('base64'));
+});

@@ -17,7 +17,7 @@ public class AppearanceTest {
     private Context context;
     private static Field field(String name) throws Exception { Field f=MainActivity.class.getDeclaredField(name);f.setAccessible(true);return f; }
     private static Object call(MainActivity a,String name) throws Exception { Method m=MainActivity.class.getDeclaredMethod(name);m.setAccessible(true);return m.invoke(a); }
-    @Before public void clearSettings() { context=InstrumentationRegistry.getInstrumentation().getTargetContext();context.getSharedPreferences("relay",0).edit().clear().commit(); }
+    @Before public void clearSettings() { context=InstrumentationRegistry.getInstrumentation().getTargetContext();context.getSharedPreferences("relay",0).edit().clear().putString("theme","light").commit(); }
     private void seed(MainActivity activity) throws Exception {
         String[] names={"Ananya Sharma","Rohan Mehta","Ishaan Patel","Meera Kapoor","Arjun Verma","Sara Nair"};
         String[] previews={"Found a lovely café for Saturday ☕","Sending it over in a minute","That sounds like a great plan!","The photos turned out so well","See you at the trailhead","Thanks for the recommendation :)"};
