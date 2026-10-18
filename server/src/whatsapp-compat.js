@@ -7,6 +7,16 @@ export function installWhatsAppCompatibility() {
     throw new Error('WhatsApp Web is still loading. Retry after synchronization.');
   }
   const collections = window.require('WAWebCollections');
+  // Upstream serializes LID contacts with their phone-number ID. Preserve the
+  // original ID so chats using @lid can still find their contact metadata.
+  if (typeof utils.getContactModel === 'function' && !utils.__chatRelayContactIds) {
+    const originalContact = utils.getContactModel;
+    utils.getContactModel = function (contact, ...args) {
+      const model = originalContact.call(this, contact, ...args);
+      return contact.id?._serialized ? { ...model, id: contact.id } : model;
+    };
+    utils.__chatRelayContactIds = true;
+  }
   const sample = collections.Chat.getModelsArray().find(chat => chat.lastReceivedKey?.$1)?.lastReceivedKey
     || collections.Msg.getModelsArray().find(message => message.id?.$1)?.id;
   if (sample && sample._serialized === undefined && typeof sample.$1 === 'string') {

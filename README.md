@@ -167,6 +167,7 @@ Media requests require the bearer token. CDN profile-photo URLs are kept behind 
 | WhatsApp `qr` / `syncing` | Scan the terminal QR if shown. If stuck after authentication, use the latest server and restart it: a startup compatibility fix retries event bindings interrupted by transient browser frames. Look for **WhatsApp is ready** in the terminal. |
 | WhatsApp `initialization_error` | The terminal now logs the startup failure. Restart the server; do not delete your linked-device session as a first step. |
 | Chat list fails although WhatsApp is ready | Restart the server with the latest source. A compatibility shim handles WhatsApp Web’s message-key field rename (`_serialized` → `$1`), which breaks upstream `getChats()` in 1.34.7. No new APK or re-link is needed. |
+| Businesses appear under DMs or show phone numbers instead of names | Restart the server with the latest source. The contact compatibility shim preserves WhatsApp LIDs instead of replacing them with phone-number IDs, allowing chats to match business flags and verified names. Airtel and Decode Age are covered by the regression tests. No re-link is needed. |
 | WhatsApp disconnected | Restart server; check WhatsApp Linked devices and re-link if needed. |
 | Browser fails to launch | Puppeteer browser downloaded, required Linux libraries installed, or correct `CHROME_PATH`. |
 | Empty/limited history | Wait for WhatsApp Web synchronization; only history available to the linked session is returned. |

@@ -20,6 +20,8 @@ const serialize = m => ({
 export const contactName = (contact, fallback = '') =>
   [contact?.name, contact?.verifiedName, contact?.pushname, contact?.shortName, fallback, contact?.number]
     .find(value => typeof value === 'string' && value.trim())?.trim() || 'Unknown contact';
+const businessContact = contact => !!(contact?.isBusiness || contact?.isEnterprise
+  || (typeof contact?.verifiedName === 'string' && contact.verifiedName.trim()));
 export function createWhatsApp({ client: suppliedClient } = {}) {
   let state = 'starting';
   const callEvents = new Map();
@@ -69,20 +71,23 @@ export function createWhatsApp({ client: suppliedClient } = {}) {
     start: () => client.initialize(),
     stop: () => client.destroy(),
     contacts: () => compatible(async () => (await client.getContacts())
-      .filter(c => /@(c\.us|lid)$/.test(c.id._serialized) && !c.isMe && (c.isMyContact || c.isBusiness))
-      .map(c => ({ id: c.id._serialized, name: contactName(c), number: c.number || '', isBusiness: !!c.isBusiness }))
+      .filter(c => /@(c\.us|lid)$/.test(c.id._serialized) && !c.isMe && (c.isMyContact || businessContact(c)))
+      .map(c => ({ id: c.id._serialized, name: contactName(c), number: c.number || '', isBusiness: businessContact(c) }))
       .sort((a, b) => a.name.localeCompare(b.name))),
     chats: () => compatible(async () => {
-      const contacts = new Map((await client.getContacts()).map(c => [c.id._serialized, c]));
-      return (await client.getChats()).filter(c => /@(c\.us|g\.us|lid)$/.test(c.id._serialized)).map(c => {
-        const contact = contacts.get(c.id._serialized);
-        const isBusiness = !c.isGroup && !!(contact?.isBusiness || contact?.isEnterprise);
+      const contacts = new Map();
+      for (const contact of await client.getContacts()) {
+        contacts.set(contact.id._serialized, contact);
+      }
+      return (await Promise.all((await client.getChats()).filter(c => /@(c\.us|g\.us|lid)$/.test(c.id._serialized)).map(async c => {
+        const contact = contacts.get(c.id._serialized) || (!c.isGroup ? await resolveContact(c.id._serialized) : null);
+        const isBusiness = !c.isGroup && businessContact(contact);
         return { id: c.id._serialized,
           name: c.isGroup ? (c.name || c.groupMetadata?.subject || 'Unnamed group') : contactName(contact, c.name || c.id.user),
           isGroup: !!c.isGroup, isBusiness, category: c.isGroup ? 'Groups' : isBusiness ? 'Business' : 'DMs',
           unread: c.unreadCount, timestamp: c.timestamp || 0,
           lastMessage: c.lastMessage ? { ...serialize(c.lastMessage), authorName: c.lastMessage.author ? contactName(contacts.get(c.lastMessage.author), c.lastMessage.author.split('@')[0]) : '' } : null };
-      }).sort((a, b) => b.timestamp - a.timestamp);
+      }))).sort((a, b) => b.timestamp - a.timestamp);
     }),
     messages: id => compatible(async () => {
       const messages = await (await client.getChatById(id)).fetchMessages({ limit: 60 });

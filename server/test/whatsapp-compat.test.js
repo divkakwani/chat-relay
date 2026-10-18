@@ -56,3 +56,11 @@ test('materializes inherited message-key aliases before Puppeteer serialization'
   install();
   assert.equal(evaluate(`JSON.parse(JSON.stringify(window.WWebJS.getMessageModel({ id: key }))).id._serialized`), 'message-key');
 });
+test('preserves original LID instead of the phone ID returned by upstream contact serialization', () => {
+  const { install, evaluate } = fixture();
+  evaluate(`window.WWebJS.getContactModel = contact => ({ id: contact.phoneNumber, isBusiness: true })`);
+  install();
+  install();
+  assert.equal(evaluate(`window.WWebJS.getContactModel({ id: { _serialized: '123@lid' }, phoneNumber: { _serialized: '456@c.us' } }).id._serialized`), '123@lid');
+  assert.equal(evaluate(`window.WWebJS.getContactModel({ id: { _serialized: '123@lid' }, phoneNumber: { _serialized: '456@c.us' } }).id._serialized`), '123@lid');
+});
