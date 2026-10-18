@@ -136,7 +136,7 @@ Then install dependencies using `PUPPETEER_SKIP_DOWNLOAD=true npm ci`. Do not us
 - Tap your profile circle in the inbox, then select **Light**, **Dark**, or **System**. System mode follows Android's device setting. All themes use the bundled, openly licensed Inter font; the license is included in the app assets.
 - The compose button starts a conversation with an international WhatsApp phone number. Existing chats can be searched by name or preview. Draft text is retained in memory when navigating between chats and across recreation of the current conversation.
 
-Media requests require the bearer token. CDN profile-photo URLs are kept behind the server instead of exposing them to Android. The server sends media with `Cache-Control: no-store`. Android keeps bounded image thumbnails in memory; videos are stored in the app's private cache for playback and removed when the viewer closes. Android screenshots and backups are disabled in normal app builds.
+Media requests require the bearer token. CDN profile-photo URLs are kept behind the server instead of exposing them to Android. The server sends media with `Cache-Control: no-store`. Android keeps bounded image thumbnails in memory; videos are stored in the app's private cache for playback and removed when the viewer closes. Android screenshots are allowed in the inbox, conversations, settings and media viewer. Android backups are disabled.
 
 ## Voice and video calls
 

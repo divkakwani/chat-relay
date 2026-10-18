@@ -2,7 +2,6 @@ package dev.chatrelay;
 
 import android.content.Context;
 import android.graphics.*;
-import android.view.WindowManager;
 import android.widget.*;
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.platform.app.InstrumentationRegistry;
@@ -26,7 +25,6 @@ public class AppearanceTest {
         chats.put(new JSONObject().put("id","123-456@g.us").put("name","Weekend plans").put("isGroup",true).put("timestamp",now).put("lastMessage",new JSONObject().put("text","Saturday works for everyone")));
         field("chats").set(activity,chats);field("firstSync").set(activity,false);call(activity,"inbox");
         ((TextView)field("status").get(activity)).setVisibility(android.view.View.GONE);
-        activity.getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE); // Only synthetic emulator screenshots.
     }
     private void capture(String name) throws Exception {
         InstrumentationRegistry.getInstrumentation().waitForIdleSync();Thread.sleep(400);

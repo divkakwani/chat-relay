@@ -13,7 +13,7 @@ public class MediaActivity extends Activity {
     private File videoFile;
     private VideoView video;
     @Override public void onCreate(Bundle state) {
-        super.onCreate(state); getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        super.onCreate(state);
         LinearLayout root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setBackgroundColor(Color.BLACK);
         root.setOnApplyWindowInsetsListener((v, insets) -> { v.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(), insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom()); return insets; });
         TextView close = new TextView(this); close.setText("‹  Close"); close.setTextSize(18); close.setTextColor(Color.WHITE); close.setPadding(24,24,24,24); close.setOnClickListener(v -> finish()); root.addView(close);

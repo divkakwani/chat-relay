@@ -47,7 +47,6 @@ public class MainActivity extends Activity {
 
     @Override public void onCreate(Bundle saved) {
         configureTheme(); super.onCreate(saved);
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
         try {
             regular = new Typeface.Builder(getAssets(), "fonts/Inter.ttf").setFontVariationSettings("'wght' 400, 'opsz' 14").build();
             medium = new Typeface.Builder(getAssets(), "fonts/Inter.ttf").setFontVariationSettings("'wght' 600, 'opsz' 14").build();
