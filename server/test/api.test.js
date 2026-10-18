@@ -139,3 +139,10 @@ test('decodes call identifiers and rejects malformed path encodings safely', asy
   assert.equal((await request('/api/chats/%invalid/messages')).status,400);
   assert.equal((await request('/api/calls/%invalid/reject',{method:'POST'})).status,400);
 });
+
+test('contact list requires authentication and returns relay contact names', async t => {
+  const contacts = [{ id: '123@c.us', name: 'Saved contact', isBusiness: false }];
+  const { request } = await fixture(t, { contacts: async () => contacts });
+  assert.equal((await request('/api/contacts', { headers: { Authorization: '' } })).status, 401);
+  assert.deepEqual(await (await request('/api/contacts')).json(), { contacts });
+});

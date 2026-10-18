@@ -37,7 +37,7 @@ public class MainActivity extends Activity {
     private ChatAdapter adapter;
     private RelayApi api;
     private String base = "", token = "", screen = "", chatId = "", chatName = "", rendered = "", inboxSnapshot = "", tab = "DMs", query = "", accountId = "", accountName = "You", pickerChat = "";
-    private JSONArray chats = new JSONArray(), calls = new JSONArray();
+    private JSONArray chats = new JSONArray(), calls = new JSONArray(), contacts = new JSONArray();
     private final Map<String,String> drafts = new HashMap<>();
     private final Set<String> seenCalls = new HashSet<>();
     private int generation;
@@ -50,14 +50,14 @@ public class MainActivity extends Activity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
         try {
             regular = new Typeface.Builder(getAssets(), "fonts/Inter.ttf").setFontVariationSettings("'wght' 400, 'opsz' 14").build();
-            medium = new Typeface.Builder(getAssets(), "fonts/Inter.ttf").setFontVariationSettings("'wght' 550, 'opsz' 14").build();
+            medium = new Typeface.Builder(getAssets(), "fonts/Inter.ttf").setFontVariationSettings("'wght' 600, 'opsz' 14").build();
             bold = new Typeface.Builder(getAssets(), "fonts/Inter.ttf").setFontVariationSettings("'wght' 700, 'opsz' 24").build();
         } catch (Exception e) { regular = Typeface.create("sans-serif",Typeface.NORMAL); medium = Typeface.create("sans-serif-medium",Typeface.NORMAL); bold = Typeface.create("sans-serif",Typeface.BOLD); }
         base = getSharedPreferences("relay",0).getString("url","");
         try { token = SecretStore.load(this); } catch (Exception ignored) {}
         api = new RelayApi(base,token);
         if (saved != null) {
-            tab = saved.getString("tab","DMs"); query = saved.getString("query",""); pickerChat = saved.getString("pickerChat","");
+            tab = saved.getString("tab","DMs"); if(tab.equals("Calls"))tab="DMs"; query = saved.getString("query",""); pickerChat = saved.getString("pickerChat","");
             chatId = saved.getString("chatId",""); chatName = saved.getString("chatName","");
             drafts.put(chatId, saved.getString("draft",""));
         }
@@ -91,7 +91,7 @@ public class MainActivity extends Activity {
     private LinearLayout row() { LinearLayout v = new LinearLayout(this); v.setGravity(Gravity.CENTER_VERTICAL); return v; }
     private LinearLayout.LayoutParams weight() { return new LinearLayout.LayoutParams(0,-2,1); }
     private TextView text(String value, int size, int color, boolean strong) {
-        TextView v = new TextView(this); v.setText(value); v.setTextSize(size); v.setTextColor(color); v.setTypeface(strong ? medium : regular); v.setIncludeFontPadding(false); v.setLineSpacing(dp(3),1); return v;
+        TextView v = new TextView(this); v.setText(value); v.setTextSize(size); v.setTextColor(color); v.setTypeface(strong ? (size >= 22 ? bold : medium) : regular); v.setIncludeFontPadding(false); v.setLineSpacing(dp(3),1); return v;
     }
     private TextView action(String label, Runnable run) { TextView v = text(label,14,green,true); pad(v,14,16); v.setMinHeight(dp(48)); v.setGravity(Gravity.CENTER); v.setOnClickListener(w -> run.run()); return v; }
     private View icon(String name, Runnable run) { Icons v = new Icons(this,name,green); v.setLayoutParams(new LinearLayout.LayoutParams(dp(46),dp(48))); v.setOnClickListener(w -> run.run()); v.setFocusable(true); return v; }
@@ -133,7 +133,7 @@ public class MainActivity extends Activity {
         LinearLayout heading = row(); pad(heading,24,22); heading.addView(wordmark(),weight());
         myAvatar = avatar(accountName,accountId,40); myAvatar.setContentDescription("Settings and appearance"); myAvatar.setOnClickListener(v -> settings()); heading.addView(myAvatar,new LinearLayout.LayoutParams(dp(40),dp(40))); root.addView(heading);
         LinearLayout searchRow = row(); searchRow.setBackground(bg(surface,28)); searchRow.addView(icon("Search",() -> search.requestFocus()));
-        search = new EditText(this); search.setSingleLine(); search.setTextSize(14); search.setTypeface(regular); search.setTextColor(ink); search.setHintTextColor(muted); search.setHint("Search chats and calls"); search.setBackgroundColor(Color.TRANSPARENT); search.setPadding(0,0,dp(16),0); searchRow.addView(search,weight());
+        search = new EditText(this); search.setSingleLine(); search.setTextSize(14); search.setTypeface(regular); search.setTextColor(ink); search.setHintTextColor(muted); search.setHint("Search conversations"); search.setBackgroundColor(Color.TRANSPARENT); search.setPadding(0,0,dp(16),0); searchRow.addView(search,weight());
         LinearLayout.LayoutParams sl = new LinearLayout.LayoutParams(-1,dp(50)); sl.setMargins(dp(22),0,dp(22),dp(14)); root.addView(searchRow,sl); search.setText(query);
         search.addTextChangedListener(new TextWatcher() { public void beforeTextChanged(CharSequence s,int st,int c,int a) {} public void afterTextChanged(Editable e) {} public void onTextChanged(CharSequence s,int st,int b,int c) { query = s.toString(); renderInbox(); } });
         tabs = row(); pad(tabs,22,0); root.addView(tabs); renderTabs();
@@ -148,19 +148,20 @@ public class MainActivity extends Activity {
     }
     private void renderTabs() {
         tabs.removeAllViews();
-        int unread = 0; for (int i=0;i<chats.length();i++) if (!chats.optJSONObject(i).optBoolean("isGroup") && chats.optJSONObject(i).optInt("unread")>0) unread++;
-        for (String label : new String[]{"DMs","Groups","Calls"}) {
+        for (String label : new String[]{"DMs","Groups","Business"}) {
+            int unread=0; for(int i=0;i<chats.length();i++){JSONObject c=chats.optJSONObject(i);if(c!=null&&category(c).equals(label)&&c.optInt("unread")>0)unread++;}
             LinearLayout container = col(); container.setGravity(Gravity.CENTER); boolean selected = tab.equals(label);
-            TextView title = text(label + (label.equals("DMs") && unread>0 ? "  " + unread : ""),14,selected?green:muted,true); title.setGravity(Gravity.CENTER); pad(title,0,16); container.addView(title,new LinearLayout.LayoutParams(-1,-2));
+            TextView title = text(label + (unread>0 ? "  " + unread : ""),14,selected?green:muted,true); title.setGravity(Gravity.CENTER); pad(title,0,16); container.addView(title,new LinearLayout.LayoutParams(-1,-2));
             View underline = new View(this); underline.setBackground(bg(selected?green:line,2)); container.addView(underline,new LinearLayout.LayoutParams(-1,dp(selected?3:1)));
             container.setOnClickListener(v -> { tab=label; renderTabs(); renderInbox(); }); tabs.addView(container,new LinearLayout.LayoutParams(0,-1,1));
         }
     }
+    private String category(JSONObject chat) { return chat.optBoolean("isGroup") ? "Groups" : chat.optBoolean("isBusiness") ? "Business" : "DMs"; }
     private String preview(JSONObject message) {
         if (message==null) return "Start a conversation";
         String value = message.optString("text");
         if (value.isEmpty()) { String mime = message.optString("mimetype"); value = mime.startsWith("video/") || message.optString("type").equals("video") ? "Video" : message.optBoolean("hasMedia") ? "Photo or attachment" : "Message"; }
-        return (message.optBoolean("fromMe")?"You: ":"")+value;
+        return (message.optBoolean("fromMe")?"You: ":!message.optString("author").isEmpty()&&!message.optString("authorName").isEmpty()?message.optString("authorName")+": ":"")+value;
     }
     private String time(long seconds, boolean full) {
         if (seconds<=0) return ""; long days = (System.currentTimeMillis()-seconds*1000)/86400000;
@@ -178,7 +179,7 @@ public class MainActivity extends Activity {
         for(int i=0;i<source.length();i++) {
             JSONObject item=source.optJSONObject(i); if(item==null)continue;
             boolean isCall=tab.equals("Calls");
-            if(!isCall && item.optBoolean("isGroup")!=tab.equals("Groups"))continue;
+            if(!isCall && !category(item).equals(tab))continue;
             String name=isCall?nameFor(item.optString("from")):item.optString("name");
             if(!(name+" "+(isCall?"":preview(item.optJSONObject("lastMessage")))).toLowerCase(Locale.ROOT).contains(q))continue;
             visible.add(item);
@@ -193,15 +194,39 @@ public class MainActivity extends Activity {
             }
             JSONObject item=visible.get(position); boolean isCall=tab.equals("Calls"); String id=item.optString(isCall?"from":"id"), name=isCall?nameFor(id):item.optString("name");
             LinearLayout cell=row(); pad(cell,24,18); cell.setMinimumHeight(dp(90)); cell.addView(avatar(name,id,48),new LinearLayout.LayoutParams(dp(48),dp(48)));
-            LinearLayout lines=col(); pad(lines,15,0); TextView title=text(name,14,ink,true); title.setSingleLine(); title.setEllipsize(TextUtils.TruncateAt.END); lines.addView(title);
+            LinearLayout lines=col(); pad(lines,15,0); TextView title=text(name,16,ink,true); title.setSingleLine(); title.setEllipsize(TextUtils.TruncateAt.END); lines.addView(title);
             String subtitle=isCall?(item.optBoolean("isVideo")?"Video call":"Voice call")+" · "+item.optString("status"):preview(item.optJSONObject("lastMessage"));
-            TextView sub=text(subtitle,13,muted,false); sub.setSingleLine(); sub.setEllipsize(TextUtils.TruncateAt.END); sub.setPadding(0,dp(12),0,0); lines.addView(sub); cell.addView(lines,weight());
-            LinearLayout trailing=col(); trailing.setGravity(Gravity.END); trailing.addView(text(time(item.optLong("timestamp"),false),10,item.optInt("unread")>0?green:muted,false));
+            TextView sub=text(subtitle,13,muted,false); sub.setSingleLine(); sub.setEllipsize(TextUtils.TruncateAt.END); sub.setPadding(0,dp(7),0,0); lines.addView(sub); cell.addView(lines,weight());
+            LinearLayout trailing=col(); trailing.setGravity(Gravity.END); trailing.addView(text(time(item.optLong("timestamp"),false),11,item.optInt("unread")>0?green:muted,false));
             int unread=item.optInt("unread"); if(unread>0) { TextView badge=text(unread>99?"99+":""+unread,10,dark?paper:Color.WHITE,true); badge.setGravity(Gravity.CENTER); pad(badge,6,4); badge.setBackground(bg(green,16)); LinearLayout.LayoutParams bp=new LinearLayout.LayoutParams(-2,-2); bp.topMargin=dp(12); trailing.addView(badge,bp); }
             cell.addView(trailing); cell.setOnClickListener(v -> { if(isCall) showCall(item); else openChat(id,name); }); return cell;
         }
     }
     private void newConversation() {
+        LinearLayout content=col(); pad(content,20,8);
+        EditText filter=field("Search name or number"); filter.setSingleLine(); content.addView(filter);
+        TextView feedback=text("Loading contacts…",13,muted,false); pad(feedback,0,12); content.addView(feedback);
+        ListView choices=new ListView(this); choices.setDivider(null); content.addView(choices,new LinearLayout.LayoutParams(-1,dp(340)));
+        ArrayList<JSONObject> matches=new ArrayList<>();
+        ArrayAdapter<String> names=new ArrayAdapter<>(this,android.R.layout.simple_list_item_1,new ArrayList<>());
+        choices.setAdapter(names);
+        AlertDialog dialog=new AlertDialog.Builder(this).setTitle("New message").setView(content).setNegativeButton("Cancel",null).setNeutralButton("Use phone number",(d,w)->newNumber()).create();
+        Runnable update=()->{
+            matches.clear(); names.clear(); String q=filter.getText().toString().trim().toLowerCase(Locale.ROOT);
+            Map<String,JSONObject> all=new LinkedHashMap<>();
+            for(int i=0;i<contacts.length();i++){JSONObject c=contacts.optJSONObject(i);if(c!=null)all.put(c.optString("id"),c);}
+            for(int i=0;i<chats.length();i++){JSONObject c=chats.optJSONObject(i);if(c!=null&&!c.optBoolean("isGroup"))all.putIfAbsent(c.optString("id"),c);}
+            ArrayList<JSONObject> sorted=new ArrayList<>(all.values()); sorted.sort((a,b)->a.optString("name").compareToIgnoreCase(b.optString("name")));
+            for(JSONObject c:sorted)if((c.optString("name")+" "+c.optString("number")).toLowerCase(Locale.ROOT).contains(q)){matches.add(c);names.add(c.optString("name")+(c.optBoolean("isBusiness")?" · Business":""));}
+            feedback.setText(matches.isEmpty()?"No contacts found":"Choose a contact"); names.notifyDataSetChanged();
+        };
+        choices.setOnItemClickListener((parent,view,position,id)->{JSONObject c=matches.get(position);dialog.dismiss();openChat(c.optString("id"),c.optString("name"));});
+        filter.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int st,int c,int a){} public void afterTextChanged(Editable e){update.run();} public void onTextChanged(CharSequence s,int st,int b,int c){}});
+        dialog.show(); update.run(); feedback.setText("Loading contacts…"); RelayApi client=api;
+        worker.execute(()->{try{JSONArray data=client.json("GET","/api/contacts",null).optJSONArray("contacts");runOnUiThread(()->{if(!dialog.isShowing()||isDestroyed())return;contacts=data==null?new JSONArray():data;update.run();});}
+            catch(Exception e){runOnUiThread(()->{if(dialog.isShowing()){update.run();feedback.setText("Could not load contacts. Showing recent chats.");}});}});
+    }
+    private void newNumber() {
         EditText phone=field("Phone number with country code"); phone.setInputType(android.text.InputType.TYPE_CLASS_PHONE);
         new AlertDialog.Builder(this).setTitle("New conversation").setMessage("Enter an international WhatsApp number, including its country code.").setView(phone).setNegativeButton("Cancel",null).setPositiveButton("Open",(d,w)->{
             String number=phone.getText().toString().replaceAll("[+ ()-]","");
@@ -214,12 +239,12 @@ public class MainActivity extends Activity {
         if(screen.equals("chat") && composer!=null) drafts.put(chatId,composer.getText().toString());
         composer=null; chatId=id; chatName=name; shell("chat");
         LinearLayout header=row(); pad(header,6,8); header.addView(icon("Back",this::inbox)); header.addView(avatar(name,id,38),new LinearLayout.LayoutParams(dp(38),dp(38)));
-        LinearLayout titles=col(); pad(titles,12,0); TextView title=text(name,15,ink,true); title.setSingleLine(); title.setEllipsize(TextUtils.TruncateAt.END); titles.addView(title); TextView sub=text("WhatsApp · private relay",10,muted,false); sub.setPadding(0,dp(5),0,0); titles.addView(sub); header.addView(titles,weight());
+        LinearLayout titles=col(); pad(titles,12,0); TextView title=text(name,17,ink,true); title.setSingleLine(); title.setEllipsize(TextUtils.TruncateAt.END); titles.addView(title); TextView sub=text(id.endsWith("@g.us")?"Group conversation": "WhatsApp conversation",12,muted,false); sub.setPadding(0,dp(5),0,0); titles.addView(sub); header.addView(titles,weight());
         header.addView(icon("Voice call",()->callOptions(false))); header.addView(icon("Video call",()->callOptions(true))); root.addView(header); statusView();
         scroll=new ScrollView(this); scroll.setFillViewport(true); scroll.setBackgroundColor(dark?0xff181f16:0xfff3f5ee); messageList=col(); pad(messageList,14,16); scroll.addView(messageList); root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
         LinearLayout compose=row(); pad(compose,8,10); compose.addView(icon("Attach",this::pickMedia));
-        composer=field("Message"); composer.setSingleLine(false); composer.setMaxLines(5); composer.setText(drafts.getOrDefault(id,"")); composer.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE|android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES); compose.addView(composer,weight());
-        View send=icon("Send",this::send); compose.addView(send); root.addView(compose); refresh();
+        composer=field("Write a message…"); composer.setTextSize(16); composer.setSingleLine(false); composer.setMaxLines(5); composer.setText(drafts.getOrDefault(id,"")); composer.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE|android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES); compose.addView(composer,weight());
+        View send=icon("Send",this::send); send.setBackground(bg(outgoing,24)); compose.addView(send); root.addView(compose); refresh();
         if(!token.isEmpty())mutate("/api/chats/"+RelayApi.encode(id)+"/read",new JSONObject(),false,d->{});
     }
     private void renderMessages(JSONArray messages) {
@@ -232,8 +257,8 @@ public class MainActivity extends Activity {
             String day=new SimpleDateFormat("EEE, MMM d",Locale.getDefault()).format(new Date(m.optLong("timestamp")*1000));
             if(!day.equals(previousDay)){TextView date=text(day,10,muted,true); date.setGravity(Gravity.CENTER); pad(date,0,18); messageList.addView(date); previousDay=day;}
             boolean mine=m.optBoolean("fromMe"); LinearLayout wrap=row(); wrap.setGravity(mine?Gravity.RIGHT:Gravity.LEFT);
-            LinearLayout bubble=col(); pad(bubble,12,10); bubble.setBackground(bg(mine?outgoing:paper,18));
-            if(!mine && !m.optString("author").isEmpty()){TextView author=text(nameFor(m.optString("author")),10,green,true); author.setMaxWidth(dp(245)); bubble.addView(author);}
+            LinearLayout bubble=col(); pad(bubble,16,12); bubble.setBackground(bg(mine?outgoing:paper,18));
+            if(!mine && !m.optString("author").isEmpty()){TextView author=text(m.optString("authorName").isEmpty()?nameFor(m.optString("author")):m.optString("authorName"),12,green,true); author.setMaxWidth(dp(245)); bubble.addView(author);}
             String mime=m.optString("mimetype"), type=m.optString("type");
             boolean video=mime.startsWith("video/")||type.equals("video"), image=mime.startsWith("image/")||type.equals("image");
             if(m.optBoolean("hasMedia")) {
@@ -242,9 +267,9 @@ public class MainActivity extends Activity {
                 else if(video){LinearLayout tile=row(); tile.setBackground(bg(surface,12)); tile.addView(icon("Play",()->openMedia(path,true))); LinearLayout labels=col(); labels.addView(text("Video",14,ink,true)); labels.addView(text("Tap to download & play",10,muted,false)); tile.addView(labels); bubble.addView(tile,new LinearLayout.LayoutParams(dp(240),dp(80))); tile.setOnClickListener(v->openMedia(path,true));}
                 else bubble.addView(text("Attachment · view in WhatsApp",12,muted,false));
             }
-            String body=m.optString("text"); if(!body.isEmpty() || !m.optBoolean("hasMedia")){TextView bodyText=text(body.isEmpty()?"["+type+"]":body,14,ink,false); bodyText.setMaxWidth(dp(245)); bodyText.setTextIsSelectable(true); bodyText.setPadding(0,dp(5),0,0); bubble.addView(bodyText);}
+            String body=m.optString("text"); if(!body.isEmpty() || !m.optBoolean("hasMedia")){TextView bodyText=text(body.isEmpty()?"["+type+"]":body,16,ink,false); bodyText.setMaxWidth(dp(245)); bodyText.setTextIsSelectable(true); bodyText.setPadding(0,dp(5),0,0); bubble.addView(bodyText);}
             int ack=m.optInt("ack"); String receipt=mine?(ack>=2?"  ✓✓":ack>=1?"  ✓":"  ◷"):"";
-            TextView stamp=text(time(m.optLong("timestamp"),true)+receipt,9,ack>=3?green:muted,false); stamp.setGravity(Gravity.END); stamp.setPadding(0,dp(8),0,0); bubble.addView(stamp);
+            TextView stamp=text(time(m.optLong("timestamp"),true)+receipt,11,ack>=3?green:muted,false); stamp.setGravity(Gravity.END); stamp.setPadding(0,dp(8),0,0); bubble.addView(stamp);
             LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-2,-2); lp.bottomMargin=dp(8); wrap.addView(bubble,lp); messageList.addView(wrap);
         }
         if(bottom)scroll.post(()->scroll.fullScroll(View.FOCUS_DOWN));
@@ -343,7 +368,7 @@ public class MainActivity extends Activity {
             String nextBase="https://"+uri.getHost(),nextToken=secret.getText().toString().trim();
             if(nextToken.isEmpty()&&!base.isEmpty()&&!base.equals(nextBase))throw new Exception("Enter the access token when changing servers.");
             if(nextToken.isEmpty())nextToken=token;if(nextToken.length()<32)throw new Exception("Paste your server token (at least 32 characters).");
-            SecretStore.save(this,nextToken);token=nextToken;base=nextBase;api=new RelayApi(base,token);getSharedPreferences("relay",0).edit().putString("url",base).apply();images.close();images=new ImageLoader();chats=new JSONArray();calls=new JSONArray();drafts.clear();seenCalls.clear();accountId="";accountName="You";firstSync=true;inbox();
+            SecretStore.save(this,nextToken);token=nextToken;base=nextBase;api=new RelayApi(base,token);getSharedPreferences("relay",0).edit().putString("url",base).apply();images.close();images=new ImageLoader();chats=new JSONArray();calls=new JSONArray();contacts=new JSONArray();drafts.clear();seenCalls.clear();accountId="";accountName="You";firstSync=true;inbox();
         }catch(Exception e){error.setText(e.getMessage()==null?"Could not save connection":e.getMessage());}});save.setBackground(bg(green,18));save.setTextColor(dark?paper:Color.WHITE);form.addView(save,new LinearLayout.LayoutParams(-1,dp(52)));
         TextView note=text("PRIVATE BY DESIGN\n\nPhotos and videos travel through your authenticated relay. Profile photos follow WhatsApp privacy settings.\n\nCalls open in the official WhatsApp app. Incoming call alerts work while Chat Relay is open; background ringing and answering are not supported.\n\nInter font · SIL Open Font License",12,muted,false);pad(note,0,28);form.addView(note);
     }

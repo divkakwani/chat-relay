@@ -36,6 +36,7 @@ export function createApi({ token, relay }) {
       const url = new URL(req.url, 'http://localhost');
       if (req.method === 'GET' && url.pathname === '/api/status') return reply(200, { ...relay.status(), capabilities: { media: true, avatars: true, incomingCallEvents: true, callLinks: true, nativeCalling: false }, maxMediaBytes: MAX_MEDIA_BYTES });
       if (!relay.status().ready) throw fail(503, 'WhatsApp is not ready. Check the server terminal and linked devices.');
+      if (req.method === 'GET' && url.pathname === '/api/contacts') return reply(200, { contacts: await relay.contacts() });
       if (req.method === 'GET' && url.pathname === '/api/chats') return reply(200, { chats: await relay.chats() });
       if (req.method === 'GET' && url.pathname === '/api/calls') return reply(200, { calls: relay.calls() });
       if (req.method === 'POST' && url.pathname === '/api/call-links') {

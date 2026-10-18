@@ -17,6 +17,9 @@ const serialize = m => ({
   hasMedia: m.hasMedia, ack: m.ack, mimetype: m._data?.mimetype || '',
   filename: m._data?.filename || '', filesize: m._data?.size || 0
 });
+export const contactName = (contact, fallback = '') =>
+  [contact?.name, contact?.verifiedName, contact?.pushname, contact?.shortName, fallback, contact?.number]
+    .find(value => typeof value === 'string' && value.trim())?.trim() || 'Unknown contact';
 export function createWhatsApp({ client: suppliedClient } = {}) {
   let state = 'starting';
   const callEvents = new Map();
@@ -55,16 +58,36 @@ export function createWhatsApp({ client: suppliedClient } = {}) {
     await client.pupPage.evaluate(installWhatsAppCompatibility);
     return operation();
   };
+  const resolveContact = async id => {
+    try { return await client.getContactById(id); } catch { return null; }
+  };
+  const namedMessage = async message => ({ ...serialize(message),
+    authorName: message.author ? contactName(await resolveContact(message.author), message.author.split('@')[0]) : ''
+  });
   return {
     status: () => ({ ready: state === 'ready', state, provider: 'whatsapp', account: state === 'ready' ? { id: client.info?.wid?._serialized || '', name: client.info?.pushname || 'You' } : null }),
     start: () => client.initialize(),
     stop: () => client.destroy(),
-    chats: () => compatible(async () => (await client.getChats()).filter(c => /@(c\.us|g\.us|lid)$/.test(c.id._serialized)).map(c => ({
-      id: c.id._serialized, name: c.name || c.id.user, isGroup: c.isGroup,
-      unread: c.unreadCount, timestamp: c.timestamp || 0,
-      lastMessage: c.lastMessage ? serialize(c.lastMessage) : null
-    })).sort((a, b) => b.timestamp - a.timestamp)),
-    messages: id => compatible(async () => (await (await client.getChatById(id)).fetchMessages({ limit: 60 })).map(serialize).sort((a, b) => a.timestamp - b.timestamp)),
+    contacts: () => compatible(async () => (await client.getContacts())
+      .filter(c => /@(c\.us|lid)$/.test(c.id._serialized) && !c.isMe && (c.isMyContact || c.isBusiness))
+      .map(c => ({ id: c.id._serialized, name: contactName(c), number: c.number || '', isBusiness: !!c.isBusiness }))
+      .sort((a, b) => a.name.localeCompare(b.name))),
+    chats: () => compatible(async () => {
+      const contacts = new Map((await client.getContacts()).map(c => [c.id._serialized, c]));
+      return (await client.getChats()).filter(c => /@(c\.us|g\.us|lid)$/.test(c.id._serialized)).map(c => {
+        const contact = contacts.get(c.id._serialized);
+        const isBusiness = !c.isGroup && !!(contact?.isBusiness || contact?.isEnterprise);
+        return { id: c.id._serialized,
+          name: c.isGroup ? (c.name || c.groupMetadata?.subject || 'Unnamed group') : contactName(contact, c.name || c.id.user),
+          isGroup: !!c.isGroup, isBusiness, category: c.isGroup ? 'Groups' : isBusiness ? 'Business' : 'DMs',
+          unread: c.unreadCount, timestamp: c.timestamp || 0,
+          lastMessage: c.lastMessage ? { ...serialize(c.lastMessage), authorName: c.lastMessage.author ? contactName(contacts.get(c.lastMessage.author), c.lastMessage.author.split('@')[0]) : '' } : null };
+      }).sort((a, b) => b.timestamp - a.timestamp);
+    }),
+    messages: id => compatible(async () => {
+      const messages = await (await client.getChatById(id)).fetchMessages({ limit: 60 });
+      return (await Promise.all(messages.map(namedMessage))).sort((a, b) => a.timestamp - b.timestamp);
+    }),
     read: id => compatible(async () => (await client.getChatById(id)).sendSeen()),
     send: (id, text) => compatible(async () => serialize(await client.sendMessage(id, text))),
     sendMedia: (id, media) => compatible(async () => serialize(await client.sendMessage(id,
