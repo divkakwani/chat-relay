@@ -70,6 +70,7 @@ public class AppearanceTest {
                 assertEquals(2,named.size());assertEquals("Ananya",((JSONObject)named.get(0)).optString("name"));
                 assertEquals("Zoya",((JSONObject)named.get(1)).optString("name"));
                 assertEquals(1,((java.util.List<?>)choices.invoke(a,"99999")).size());
+                assertEquals(1,((java.util.List<?>)choices.invoke(a,"12345")).size());
                 assertEquals(1,((java.util.List<?>)choices.invoke(a,"zoya")).size());
             }catch(Exception e){throw new RuntimeException(e);}});
         }

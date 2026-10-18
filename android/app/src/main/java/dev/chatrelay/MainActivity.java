@@ -219,7 +219,11 @@ public class MainActivity extends Activity {
             JSONObject c=chats.optJSONObject(i);
             if(c!=null&&!c.optBoolean("isGroup")&&hasContactName(c)){
                 JSONObject existing=all.get(c.optString("id"));
-                if(existing==null||!hasContactName(existing))all.put(c.optString("id"),c);
+                if(existing==null)all.put(c.optString("id"),c);
+                else if(!hasContactName(existing)){
+                    try { all.put(c.optString("id"),new JSONObject(existing.toString()).put("name",c.optString("name"))); }
+                    catch(JSONException ignored) { all.put(c.optString("id"),c); }
+                }
             }
         }
         ArrayList<JSONObject> sorted=new ArrayList<>();
