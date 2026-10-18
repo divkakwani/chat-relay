@@ -17,9 +17,13 @@ const serialize = m => ({
   hasMedia: m.hasMedia, ack: m.ack, mimetype: m._data?.mimetype || '',
   filename: m._data?.filename || '', filesize: m._data?.size || 0
 });
-export const contactName = (contact, fallback = '') =>
-  [contact?.name, contact?.verifiedName, contact?.pushname, contact?.shortName, fallback, contact?.number]
-    .find(value => typeof value === 'string' && value.trim())?.trim() || 'Unknown contact';
+export const contactName = (contact, fallback = '') => {
+  const labels = [contact?.name, contact?.verifiedName, contact?.pushname, contact?.shortName, fallback, contact?.number]
+    .filter(value => typeof value === 'string' && value.trim()).map(value => value.trim());
+  // Some synced contacts use their number as `name` but have a real display
+  // name in another field. Prefer that label over any formatted phone number.
+  return labels.find(value => !/^[+\d\s().-]+$/.test(value)) || labels[0] || 'Unknown contact';
+};
 const businessContact = contact => !!(contact?.isBusiness || contact?.isEnterprise
   || (typeof contact?.verifiedName === 'string' && contact.verifiedName.trim()));
 export function createWhatsApp({ client: suppliedClient } = {}) {

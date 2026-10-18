@@ -38,6 +38,9 @@ test('contact picker includes saved contacts and businesses, excluding self and 
 test('name fallbacks preserve Unicode and ignore empty labels', () => {
   assert.equal(contactName({ name: ' ', verifiedName: '商店' }, '123'), '商店');
   assert.equal(contactName(null, '123'), '123');
+  assert.equal(contactName({ name: '+91 98765 43210', pushname: 'Priya', number: '919876543210' }), 'Priya');
+  assert.equal(contactName({ name: '+91 98765 43210', shortName: 'Priya' }), 'Priya');
+  assert.equal(contactName({ name: 'Saved friend', pushname: 'Other name' }), 'Saved friend');
 });
 test('joins LID chats to phone-serialized business contacts and keeps personal chats separate', async () => {
   const contacts = [

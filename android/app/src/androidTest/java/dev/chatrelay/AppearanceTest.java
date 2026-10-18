@@ -54,6 +54,26 @@ public class AppearanceTest {
             scenario.onActivity(a->{try{call(a,"inbox");Method open=MainActivity.class.getDeclaredMethod("openChat",String.class,String.class);open.setAccessible(true);open.invoke(a,"10000@c.us","Ananya Sharma");assertEquals("Remember this draft",((EditText)field("composer").get(a)).getText().toString());}catch(Exception e){throw new RuntimeException(e);}});
         }
     }
+    @Test public void contactPickerPrefersNamesAndKeepsNumberSearch() throws Exception {
+        try(ActivityScenario<MainActivity> scenario=ActivityScenario.launch(MainActivity.class)) {
+            scenario.onActivity(a->{try{
+                field("contacts").set(a,new JSONArray()
+                    .put(new JSONObject().put("id","1@c.us").put("name","+91 12345 67890").put("number","911234567890"))
+                    .put(new JSONObject().put("id","2@c.us").put("name","Zoya"))
+                    .put(new JSONObject().put("id","3@c.us").put("name","+91 99999 99999").put("number","919999999999")));
+                field("chats").set(a,new JSONArray()
+                    .put(new JSONObject().put("id","1@c.us").put("name","Ananya"))
+                    .put(new JSONObject().put("id","4@c.us").put("name","+91 88888 88888"))
+                    .put(new JSONObject().put("id","5@g.us").put("name","Friends").put("isGroup",true)));
+                Method choices=MainActivity.class.getDeclaredMethod("contactChoices",String.class);choices.setAccessible(true);
+                java.util.List<?> named=(java.util.List<?>)choices.invoke(a,"");
+                assertEquals(2,named.size());assertEquals("Ananya",((JSONObject)named.get(0)).optString("name"));
+                assertEquals("Zoya",((JSONObject)named.get(1)).optString("name"));
+                assertEquals(1,((java.util.List<?>)choices.invoke(a,"99999")).size());
+                assertEquals(1,((java.util.List<?>)choices.invoke(a,"zoya")).size());
+            }catch(Exception e){throw new RuntimeException(e);}});
+        }
+    }
     @Test public void imageDecodingBoundsMemoryAndRejectsInvalidData() {
         Bitmap original=Bitmap.createBitmap(2400,1600,Bitmap.Config.ARGB_8888);original.eraseColor(0xff80976d);
         ByteArrayOutputStream out=new ByteArrayOutputStream();original.compress(Bitmap.CompressFormat.PNG,100,out);original.recycle();
